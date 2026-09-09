@@ -279,6 +279,7 @@ type EmbeddedAgentParams = {
   authProfileIdSource?: unknown;
   prompt?: string;
   transcriptPrompt?: string;
+  contextTokenBudget?: number;
   memoryFlushWritePath?: string;
   silentExpected?: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -666,6 +667,14 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("skipped");
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ contextWindowTokens: 32_000 }));
+  });
+
+  it("bounds the memory-flush run to the resolved model context budget", async () => {
+    const sessionEntry = createFlushSessionEntry();
+
+    await runDefaultMemoryFlush(sessionEntry, { modelContextTokens: 32_000 });
+
+    expect(requireEmbeddedAgentCall().contextTokenBudget).toBe(32_000);
   });
 
   it.each([
