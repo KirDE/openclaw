@@ -5788,32 +5788,49 @@ describe("runCodexAppServerAttempt", () => {
 
   it("preserves a same-thread successor client after an invalid image turn/start failure", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        const binding = await readCodexAppServerBinding(sessionFile);
-        expect(binding).toMatchObject({ threadId: "thread-1" });
-        expect(binding?.clientId).toBeTruthy();
-        await writeCodexAppServerBinding(sessionFile, {
-          ...binding!,
-          clientId: "client-successor",
-        });
-        throw new Error("invalid image_url base64 payload");
-      }
-      return undefined;
-    });
+    const successor = createStartedThreadHarness(
+      async (method) => (method === "thread/resume" ? threadStartResult("thread-1") : undefined),
+      { persistedThreads: ["thread-1"] },
+    );
+    createStartedThreadHarness(
+      async (method) => {
+        if (method === "turn/start") {
+          const binding = await readCodexAppServerBinding(sessionFile);
+          expect(binding).toMatchObject({ threadId: "thread-1" });
+          expect(binding?.clientId).toBeTruthy();
+          await writeCodexAppServerBinding(sessionFile, {
+            ...binding!,
+            clientId: successor.client.getInstanceId(),
+          });
+          throw new Error("invalid image_url base64 payload");
+        }
+        return undefined;
+      },
+      { persistedThreads: [] },
+    );
 
     await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
       "invalid image_url base64 payload",
     );
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-1",
-      clientId: "client-successor",
+      clientId: successor.client.getInstanceId(),
     });
+    await expect(
+      successor.client.request("thread/resume", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({ thread: { id: "thread-1" } });
+    await expect(
+      successor.client.request("turn/start", { threadId: "thread-1", input: [] }),
+    ).resolves.toMatchObject({ turn: { id: "turn-1" } });
   });
 
   it("preserves a same-thread successor client after an invalid image terminal failure", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const harness = createStartedThreadHarness();
+    const successor = createStartedThreadHarness(
+      async (method) => (method === "thread/resume" ? threadStartResult("thread-1") : undefined),
+      { persistedThreads: ["thread-1"] },
+    );
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -5821,7 +5838,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding?.clientId).toBeTruthy();
     await writeCodexAppServerBinding(sessionFile, {
       ...binding!,
-      clientId: "client-successor",
+      clientId: successor.client.getInstanceId(),
     });
 
     await harness.notify(
@@ -5839,8 +5856,14 @@ describe("runCodexAppServerAttempt", () => {
 
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-1",
-      clientId: "client-successor",
+      clientId: successor.client.getInstanceId(),
     });
+    await expect(
+      successor.client.request("thread/resume", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({ thread: { id: "thread-1" } });
+    await expect(
+      successor.client.request("turn/start", { threadId: "thread-1", input: [] }),
+    ).resolves.toMatchObject({ turn: { id: "turn-1" } });
   });
 
   it("releases startup resources when invalid-image cleanup rejects stale authority", async () => {
