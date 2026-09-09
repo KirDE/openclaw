@@ -321,6 +321,37 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
   });
 
+  it("clears only the exact physical client owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-clear-cas" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-shared", clientId: "client-new", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: "thread-shared",
+        clientId: "client-old",
+      }),
+    ).resolves.toBe(false);
+    expect(store.read(identity)).toMatchObject({
+      threadId: "thread-shared",
+      clientId: "client-new",
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: "thread-shared",
+        clientId: "client-new",
+      }),
+    ).resolves.toBe(true);
+    expect(store.read(identity)).toBeUndefined();
+  });
+
   it("rejects same-thread and supervision ownership through replacement CAS", async () => {
     const { state } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
