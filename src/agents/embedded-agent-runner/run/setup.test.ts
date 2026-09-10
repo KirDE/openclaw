@@ -425,8 +425,13 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it("caps the effective attempt budget with the caller limit", () => {
     const result = resolveEmbeddedRunEffectiveModel({
       runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
         contextTokenBudget: 32_000,
-      } as never,
+      },
       provider: "openai",
       modelConfigProvider: "openai",
       modelId: "gpt-5.5",
@@ -447,8 +452,13 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it("does not let the caller budget widen a smaller fallback model", () => {
     const result = resolveEmbeddedRunEffectiveModel({
       runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
         contextTokenBudget: 32_000,
-      } as never,
+      },
       provider: "fallback",
       modelConfigProvider: "fallback",
       modelId: "small-model",
@@ -476,6 +486,7 @@ describe("native model-owned harness policy", () => {
         prompt: "hello",
         runId: "native-run",
         timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
         config: {
           models: {
             providers: {
@@ -496,24 +507,5 @@ describe("native model-owned harness policy", () => {
     });
 
     expect(result).toEqual({ effectiveModel: runtimeModel });
-  });
-
-  it("honors an explicit caller budget without exceeding the native model ceiling", () => {
-    const runtimeModel = createRuntimeModel();
-    const resolve = (contextTokenBudget: number) =>
-      resolveEmbeddedRunEffectiveModel({
-        runParams: {
-          contextTokenBudget,
-        } as never,
-        provider: "openai",
-        modelConfigProvider: "openai",
-        modelId: runtimeModel.id,
-        agentHarnessId: "codex",
-        runtimeModel,
-        nativeModelOwned: true,
-      });
-
-    expect(resolve(32_000).contextTokenBudget).toBe(32_000);
-    expect(resolve(1_000_000).contextTokenBudget).toBe(272_000);
   });
 });

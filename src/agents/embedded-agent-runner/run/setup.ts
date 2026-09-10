@@ -274,34 +274,13 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   contextTokenBudget?: number;
   effectiveModel: ProviderRuntimeModel;
 } {
-  const callerContextTokenBudget =
-    typeof params.contextTokenBudget === "number" &&
-    Number.isFinite(params.contextTokenBudget) &&
-    params.contextTokenBudget > 0
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (params.nativeModelOwned && callerContextTokenBudget === undefined) {
+  if (params.nativeModelOwned) {
     return { effectiveModel: params.runtimeModel };
   }
-  const resolved = params.nativeModelOwned
-    ? {
-        ctxInfo: {
-          tokens: Math.max(
-            1,
-            Math.floor(
-              readAgentModelContextTokens(params.runtimeModel) ??
-                params.runtimeModel.contextWindow ??
-                DEFAULT_CONTEXT_TOKENS,
-            ),
-          ),
-          source: "model" as const,
-        },
-        effectiveModel: params.runtimeModel,
-      }
-    : resolveEffectiveRuntimeModel(params);
+  const resolved = resolveEffectiveRuntimeModel(params);
   const contextTokenBudget = Math.min(
     resolved.ctxInfo.tokens,
-    callerContextTokenBudget ?? resolved.ctxInfo.tokens,
+    params.contextTokenBudget ?? resolved.ctxInfo.tokens,
   );
   const contextWindowInfo =
     contextTokenBudget < resolved.ctxInfo.tokens
