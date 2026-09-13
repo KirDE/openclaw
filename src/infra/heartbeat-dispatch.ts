@@ -259,12 +259,16 @@ async function prepareHeartbeatDispatchReply(
     });
     if (consume && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(sessionKey, prepared.inspectedSystemEventsToConsume);
-      if (prepared.hasExecCompletion && prepared.hasCronEvents) {
+      if (
+        preflight.deferredExecEventEntries.length > 0 ||
+        (prepared.hasExecCompletion && prepared.hasCronEvents)
+      ) {
+        const hasDeferredExec = preflight.deferredExecEventEntries.length > 0;
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
-        requestHeartbeat({
-          source: "cron",
+        (opts.deps?.requestHeartbeat ?? requestHeartbeat)({
+          source: hasDeferredExec ? "exec-event" : "cron",
           intent: "immediate",
-          reason: "cron:pending",
+          reason: hasDeferredExec ? "exec-event:pending-route" : "cron:pending",
           agentId,
           sessionKey,
           heartbeat: wake.heartbeat && {

@@ -238,25 +238,7 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
   }
 });
 
-it.each([
-  {
-    name: "missing route",
-    events: [{ text: "Exec failed (route-less, code 1)" }],
-  },
-  {
-    name: "conflicting routes",
-    events: [
-      {
-        text: "Exec completed (topic-a, code 0) :: first",
-        deliveryContext: { channel: "telegram", to: "-1001:topic:1", threadId: "1" },
-      },
-      {
-        text: "Exec completed (topic-b, code 0) :: second",
-        deliveryContext: { channel: "telegram", to: "-1002:topic:2", threadId: "2" },
-      },
-    ],
-  },
-])("fails closed for $name exec completions", async ({ events }) => {
+it("fails closed for a route-less exec completion", async () => {
   resetSystemEventsForTest();
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg = {
@@ -274,12 +256,10 @@ it.each([
       lastProvider: "telegram",
       lastTo: OWNER_DM,
     });
-    for (const event of events) {
-      enqueueSystemEvent(event.text, {
-        sessionKey: HEARTBEAT_QUEUE_KEY,
-        deliveryContext: event.deliveryContext,
-      });
-    }
+    enqueueSystemEvent("Exec failed (route-less, code 1)", {
+      sessionKey: HEARTBEAT_QUEUE_KEY,
+      contextKey: "exec:route-less",
+    });
     const sendTelegram = vi.fn();
 
     const heartbeat = await runHeartbeatOnce({
@@ -297,10 +277,109 @@ it.each([
 
     expect(heartbeat).toEqual({
       status: "skipped",
-      reason: "unsafe-exec-delivery-context",
+      reason: "no-pending-event",
     });
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendTelegram).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toEqual([]);
+  });
+});
+
+it("partitions routed exec completions instead of dropping either route", async () => {
+  resetSystemEventsForTest();
+  await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "last" } } },
+      channels: { telegram: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as never;
+    await seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: OWNER_DM,
+    });
+    const routes = ["-1001:topic:1", "-1002:topic:2"];
+    enqueueSystemEvent("Exec failed (route-less, code 1)", {
+      sessionKey: HEARTBEAT_QUEUE_KEY,
+      contextKey: "exec:route-less-neighbor",
+    });
+    for (const [index, route] of routes.entries()) {
+      enqueueSystemEvent(`Exec completed (route-${index + 1}, code 0)`, {
+        sessionKey: HEARTBEAT_QUEUE_KEY,
+        contextKey: `exec:route-${index + 1}`,
+        deliveryContext: { channel: "telegram", to: route, threadId: String(index + 1) },
+      });
+    }
+    replySpy
+      .mockResolvedValueOnce({ text: "First completed" })
+      .mockResolvedValueOnce({ text: "Second completed" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+    const requestHeartbeat = vi.fn();
+    const run = () =>
+      runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        deps: {
+          getQueueSize: () => 0,
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+          requestHeartbeat,
+        },
+      } as never);
+
+    expect((await run()).status).toBe("ran");
+    expect(sendTelegram.mock.calls[0]?.[0]).toBe(routes[0]);
+    expect(
+      peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
+    ).toHaveLength(1);
+    expect(requestHeartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "exec-event", sessionKey: HEARTBEAT_QUEUE_KEY }),
+    );
+
+    expect((await run()).status).toBe("ran");
+    expect(sendTelegram.mock.calls[1]?.[0]).toBe(routes[1]);
+    expect(
+      peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
+    ).toEqual([]);
+  });
+});
+
+it("drops a route-less completion without suppressing an independent scheduled task", async () => {
+  resetSystemEventsForTest();
+  await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "last" } } },
+      channels: { telegram: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as never;
+    await seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: OWNER_DM,
+    });
+    enqueueSystemEvent("Exec failed (route-less, code 1)", {
+      sessionKey: HEARTBEAT_QUEUE_KEY,
+      contextKey: "exec:route-less-with-task",
+    });
+    replySpy.mockResolvedValue({ text: "Scheduled task completed" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+    const heartbeat = await runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:scheduled",
+      tasks: [{ jobId: "status", name: "Status", prompt: "Check status" }],
+      deps: { getQueueSize: () => 0, getReplyFromConfig: replySpy, telegram: sendTelegram },
+    } as never);
+
+    expect(heartbeat.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledOnce();
+    expect(sendTelegram).toHaveBeenCalledOnce();
     expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toEqual([]);
   });
 });

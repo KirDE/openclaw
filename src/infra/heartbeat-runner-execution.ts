@@ -61,6 +61,7 @@ import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
   type HeartbeatWakeIntent,
+  type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
@@ -80,6 +81,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
+    requestHeartbeat?: (wake: HeartbeatWakeRequest) => void;
     nowMs?: () => number;
   };
 
@@ -108,19 +110,20 @@ function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
   return { kind: "skipped", reason } as const;
 }
 
-function suppressUnsafeExecDelivery(
+function consumeRejectedExecCompletions(
   preflight: Awaited<ReturnType<typeof resolveHeartbeatPreflight>>,
-  startedAt: number,
 ) {
-  if (preflight.unsafeExecEventEntries.length === 0) {
-    return undefined;
+  if (preflight.rejectedExecEventEntries.length === 0) {
+    return;
   }
-  consumeSelectedSystemEventEntries(preflight.session.sessionKey, preflight.unsafeExecEventEntries);
-  log.warn("heartbeat: dropped exec completions without one authoritative delivery route", {
-    count: preflight.unsafeExecEventEntries.length,
+  consumeSelectedSystemEventEntries(
+    preflight.session.sessionKey,
+    preflight.rejectedExecEventEntries,
+  );
+  log.warn("heartbeat: dropped exec completions without an authoritative delivery route", {
+    count: preflight.rejectedExecEventEntries.length,
     sessionKey: preflight.session.sessionKey,
   });
-  return skippedHeartbeatStage("unsafe-exec-delivery-context", startedAt);
 }
 
 export type HeartbeatRunOptions = {
@@ -198,14 +201,11 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       scheduledTasks,
     });
   let preflight = shouldPreflightBeforeBusy ? await resolvePreflight() : undefined;
+  if (preflight) {
+    consumeRejectedExecCompletions(preflight);
+  }
   if (preflight?.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
-  }
-  if (preflight) {
-    const unsafeExecDelivery = suppressUnsafeExecDelivery(preflight, startedAt);
-    if (unsafeExecDelivery) {
-      return unsafeExecDelivery;
-    }
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
@@ -315,13 +315,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Preflight centralizes trigger classification, event inspection, and monitor-scratch gating.
   if (!preflight) {
     preflight = await resolvePreflight();
+    consumeRejectedExecCompletions(preflight);
   }
   if (preflight.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
-  }
-  const unsafeExecDelivery = suppressUnsafeExecDelivery(preflight, startedAt);
-  if (unsafeExecDelivery) {
-    return unsafeExecDelivery;
   }
   const { sessionKey } = preflight.session;
   const isReplyRunActive =

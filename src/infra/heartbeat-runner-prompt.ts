@@ -54,7 +54,8 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
-  unsafeExecEventEntries: SystemEvent[];
+  rejectedExecEventEntries: SystemEvent[];
+  deferredExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
@@ -64,20 +65,36 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   heartbeatScratchContent?: string;
 };
 
-function resolveUnsafeExecEventEntries(events: readonly SystemEvent[]): SystemEvent[] {
-  const execEvents = events.filter((event) => isExecCompletionEvent(event.text));
-  if (execEvents.length === 0) {
-    return [];
-  }
-  const routeKeys = new Set<string>();
-  for (const event of execEvents) {
+function partitionExecEventEntries(
+  events: readonly SystemEvent[],
+  deferRoutedEntries: boolean,
+): {
+  selected: SystemEvent[];
+  deferred: SystemEvent[];
+  rejected: SystemEvent[];
+} {
+  const selected: SystemEvent[] = [];
+  const deferred: SystemEvent[] = [];
+  const rejected: SystemEvent[] = [];
+  let selectedRouteKey: string | undefined;
+  for (const event of events) {
+    if (!isExecCompletionEvent(event.text) || !event.contextKey?.startsWith("exec:")) {
+      continue;
+    }
     const context = normalizeDeliveryContext(event.deliveryContext);
     if (!hasDeliveryTargetFields(context)) {
-      return execEvents;
+      rejected.push(event);
+      continue;
     }
-    routeKeys.add(channelRouteDedupeKey(context));
+    const routeKey = channelRouteDedupeKey(context);
+    if (deferRoutedEntries) {
+      deferred.push(event);
+      continue;
+    }
+    selectedRouteKey ??= routeKey;
+    (routeKey === selectedRouteKey ? selected : deferred).push(event);
   }
-  return routeKeys.size === 1 ? [] : execEvents;
+  return { selected, deferred, rejected };
 }
 
 /**
@@ -121,15 +138,25 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries = selectAgentSystemEvents(
+  const queuedEventEntries = selectAgentSystemEvents(
     peekSystemEventEntries(session.sessionKey),
     params.agentId,
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
-  const unsafeExecEventEntries = resolveUnsafeExecEventEntries(pendingEventEntries);
+  const execPartition = partitionExecEventEntries(
+    queuedEventEntries,
+    (params.scheduledTasks?.length ?? 0) > 0,
+  );
+  const selectedExecEntries = new Set(execPartition.selected);
+  const pendingEventEntries = queuedEventEntries.filter(
+    (event) =>
+      !isExecCompletionEvent(event.text) ||
+      !event.contextKey?.startsWith("exec:") ||
+      selectedExecEntries.has(event),
+  );
   const turnSourceDeliveryContext =
-    unsafeExecEventEntries.length === 0
-      ? resolveSystemEventDeliveryContext(pendingEventEntries)
-      : undefined;
+    execPartition.selected.length > 0
+      ? resolveSystemEventDeliveryContext(execPartition.selected)
+      : resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -160,7 +187,8 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
-    unsafeExecEventEntries,
+    rejectedExecEventEntries: execPartition.rejected,
+    deferredExecEventEntries: execPartition.deferred,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
     authoritativeScheduledTick:
