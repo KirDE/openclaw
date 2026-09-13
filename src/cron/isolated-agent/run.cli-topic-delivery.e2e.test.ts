@@ -311,8 +311,8 @@ it("partitions routed exec completions instead of dropping either route", async 
       });
     }
     replySpy
-      .mockResolvedValueOnce({ text: "First completed" })
-      .mockResolvedValueOnce({ text: "Second completed" });
+      .mockResolvedValueOnce({ text: "Completed" })
+      .mockResolvedValueOnce({ text: "Completed" });
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
     const requestHeartbeat = vi.fn();
     const run = () =>
@@ -336,7 +336,12 @@ it("partitions routed exec completions instead of dropping either route", async 
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
     ).toHaveLength(1);
     expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "exec-event", sessionKey: HEARTBEAT_QUEUE_KEY }),
+      expect.objectContaining({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: HEARTBEAT_QUEUE_KEY,
+      }),
     );
 
     expect((await run()).status).toBe("ran");

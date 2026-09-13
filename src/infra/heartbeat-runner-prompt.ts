@@ -68,6 +68,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
 function partitionExecEventEntries(
   events: readonly SystemEvent[],
   deferRoutedEntries: boolean,
+  allowRoutelessEntries: boolean,
 ): {
   selected: SystemEvent[];
   deferred: SystemEvent[];
@@ -83,7 +84,7 @@ function partitionExecEventEntries(
     }
     const context = normalizeDeliveryContext(event.deliveryContext);
     if (!hasDeliveryTargetFields(context)) {
-      rejected.push(event);
+      (allowRoutelessEntries ? selected : rejected).push(event);
       continue;
     }
     const routeKey = channelRouteDedupeKey(context);
@@ -145,6 +146,7 @@ export async function resolveHeartbeatPreflight(params: {
   const execPartition = partitionExecEventEntries(
     queuedEventEntries,
     (params.scheduledTasks?.length ?? 0) > 0,
+    params.heartbeat?.target === "none",
   );
   const selectedExecEntries = new Set(execPartition.selected);
   const pendingEventEntries = queuedEventEntries.filter(

@@ -267,8 +267,8 @@ async function prepareHeartbeatDispatchReply(
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
         (opts.deps?.requestHeartbeat ?? requestHeartbeat)({
           source: hasDeferredExec ? "exec-event" : "cron",
-          intent: "immediate",
-          reason: hasDeferredExec ? "exec-event:pending-route" : "cron:pending",
+          intent: hasDeferredExec ? "event" : "immediate",
+          reason: hasDeferredExec ? "exec-event" : "cron:pending",
           agentId,
           sessionKey,
           heartbeat: wake.heartbeat && {
@@ -408,6 +408,7 @@ async function prepareHeartbeatDispatchReply(
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
+      !prepared.hasExecCompletion &&
       !outcome.mediaUrls.length &&
       !outcome.hasStructuredReplyContent &&
       stateEntry?.lastHeartbeatText?.trim() &&
