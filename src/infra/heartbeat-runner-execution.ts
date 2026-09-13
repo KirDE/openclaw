@@ -68,6 +68,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
@@ -105,6 +106,21 @@ function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
     durationMs: Date.now() - startedAt,
   });
   return { kind: "skipped", reason } as const;
+}
+
+function suppressUnsafeExecDelivery(
+  preflight: Awaited<ReturnType<typeof resolveHeartbeatPreflight>>,
+  startedAt: number,
+) {
+  if (preflight.unsafeExecEventEntries.length === 0) {
+    return undefined;
+  }
+  consumeSelectedSystemEventEntries(preflight.session.sessionKey, preflight.unsafeExecEventEntries);
+  log.warn("heartbeat: dropped exec completions without one authoritative delivery route", {
+    count: preflight.unsafeExecEventEntries.length,
+    sessionKey: preflight.session.sessionKey,
+  });
+  return skippedHeartbeatStage("unsafe-exec-delivery-context", startedAt);
 }
 
 export type HeartbeatRunOptions = {
@@ -184,6 +200,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   let preflight = shouldPreflightBeforeBusy ? await resolvePreflight() : undefined;
   if (preflight?.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
+  }
+  if (preflight) {
+    const unsafeExecDelivery = suppressUnsafeExecDelivery(preflight, startedAt);
+    if (unsafeExecDelivery) {
+      return unsafeExecDelivery;
+    }
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
@@ -296,6 +318,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   }
   if (preflight.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
+  }
+  const unsafeExecDelivery = suppressUnsafeExecDelivery(preflight, startedAt);
+  if (unsafeExecDelivery) {
+    return unsafeExecDelivery;
   }
   const { sessionKey } = preflight.session;
   const isReplyRunActive =

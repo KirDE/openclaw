@@ -7,6 +7,11 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import {
+  hasDeliveryTargetFields,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   buildCronEventPrompt,
@@ -49,6 +54,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
+  unsafeExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
@@ -57,6 +63,22 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   scratchRevision?: number;
   heartbeatScratchContent?: string;
 };
+
+function resolveUnsafeExecEventEntries(events: readonly SystemEvent[]): SystemEvent[] {
+  const execEvents = events.filter((event) => isExecCompletionEvent(event.text));
+  if (execEvents.length === 0) {
+    return [];
+  }
+  const routeKeys = new Set<string>();
+  for (const event of execEvents) {
+    const context = normalizeDeliveryContext(event.deliveryContext);
+    if (!hasDeliveryTargetFields(context)) {
+      return execEvents;
+    }
+    routeKeys.add(channelRouteDedupeKey(context));
+  }
+  return routeKeys.size === 1 ? [] : execEvents;
+}
 
 /**
  * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
@@ -103,7 +125,11 @@ export async function resolveHeartbeatPreflight(params: {
     peekSystemEventEntries(session.sessionKey),
     params.agentId,
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
-  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+  const unsafeExecEventEntries = resolveUnsafeExecEventEntries(pendingEventEntries);
+  const turnSourceDeliveryContext =
+    unsafeExecEventEntries.length === 0
+      ? resolveSystemEventDeliveryContext(pendingEventEntries)
+      : undefined;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -134,6 +160,7 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
+    unsafeExecEventEntries,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
     authoritativeScheduledTick:

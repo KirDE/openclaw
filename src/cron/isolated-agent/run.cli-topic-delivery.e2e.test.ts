@@ -17,7 +17,11 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "../../infra/heartbeat-runner.test-utils.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
-import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
@@ -232,4 +236,71 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
   } finally {
     restoreFastTestEnv(previousFastTestEnv);
   }
+});
+
+it.each([
+  {
+    name: "missing route",
+    events: [{ text: "Exec failed (route-less, code 1)" }],
+  },
+  {
+    name: "conflicting routes",
+    events: [
+      {
+        text: "Exec completed (topic-a, code 0) :: first",
+        deliveryContext: { channel: "telegram", to: "-1001:topic:1", threadId: "1" },
+      },
+      {
+        text: "Exec completed (topic-b, code 0) :: second",
+        deliveryContext: { channel: "telegram", to: "-1002:topic:2", threadId: "2" },
+      },
+    ],
+  },
+])("fails closed for $name exec completions", async ({ events }) => {
+  resetSystemEventsForTest();
+  await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "last" },
+        },
+      },
+      channels: { telegram: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as never;
+    await seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: OWNER_DM,
+    });
+    for (const event of events) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: HEARTBEAT_QUEUE_KEY,
+        deliveryContext: event.deliveryContext,
+      });
+    }
+    const sendTelegram = vi.fn();
+
+    const heartbeat = await runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      deps: {
+        getQueueSize: () => 0,
+        getReplyFromConfig: replySpy,
+        telegram: sendTelegram,
+      },
+    } as never);
+
+    expect(heartbeat).toEqual({
+      status: "skipped",
+      reason: "unsafe-exec-delivery-context",
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toEqual([]);
+  });
 });
