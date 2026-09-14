@@ -102,6 +102,8 @@ export type RunEmbeddedAgentParams = {
   sessionPersistence?: "durable" | "detached";
   sessionId: string;
   sessionKey?: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
   sessionTarget?: AgentRunSessionTarget;
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */

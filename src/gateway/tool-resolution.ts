@@ -387,6 +387,7 @@ export function resolveGatewayScopedTools(
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
+          execCompletionSessionKey: params.execCompletionSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
           workspaceDir,

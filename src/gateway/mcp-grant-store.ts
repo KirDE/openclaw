@@ -24,6 +24,8 @@ import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
   runtimePolicySessionKey?: string;
   /** Agent whose execution policy applies when it differs from the durable session owner. */
   runtimePolicyAgentId?: string;

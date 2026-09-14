@@ -18,6 +18,7 @@ export function selectCronRouteCurrentSessionKey(
   agentSessionKey: string,
   deliveryProvider: string,
   deliveryTarget: string,
+  deliveryThreadId?: string | number,
 ): string {
   const bound = (job.sessionKey ?? "").trim();
   const parsedBound = parseAgentSessionKey(bound);
@@ -25,15 +26,17 @@ export function selectCronRouteCurrentSessionKey(
   if (!parsedBound || !parsedRun || parsedBound.agentId !== parsedRun.agentId) {
     return agentSessionKey;
   }
-  const conversation = /^([^:]+):(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
-    parsedBound.rest,
-  );
+  const conversation =
+    /^([^:]+):(direct|group|channel):([^:]+)(?::(?:thread|topic):([^:]+))?$/i.exec(
+      parsedBound.rest,
+    );
   const targetPeerId = stripOutboundTargetKindPrefix(
     stripTargetProviderPrefix(deliveryTarget, deliveryProvider),
   );
   if (
     conversation?.[1]?.toLowerCase() !== deliveryProvider.trim().toLowerCase() ||
-    conversation[3] !== targetPeerId
+    conversation[3] !== targetPeerId ||
+    (deliveryThreadId != null && (conversation[4] ?? "") !== String(deliveryThreadId))
   ) {
     return agentSessionKey;
   }

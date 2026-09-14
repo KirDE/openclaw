@@ -69,7 +69,6 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
@@ -108,22 +107,6 @@ function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
     durationMs: Date.now() - startedAt,
   });
   return { kind: "skipped", reason } as const;
-}
-
-function consumeRejectedExecCompletions(
-  preflight: Awaited<ReturnType<typeof resolveHeartbeatPreflight>>,
-) {
-  if (preflight.rejectedExecEventEntries.length === 0) {
-    return;
-  }
-  consumeSelectedSystemEventEntries(
-    preflight.session.sessionKey,
-    preflight.rejectedExecEventEntries,
-  );
-  log.warn("heartbeat: dropped exec completions without an authoritative delivery route", {
-    count: preflight.rejectedExecEventEntries.length,
-    sessionKey: preflight.session.sessionKey,
-  });
 }
 
 export type HeartbeatRunOptions = {
@@ -201,9 +184,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       scheduledTasks,
     });
   let preflight = shouldPreflightBeforeBusy ? await resolvePreflight() : undefined;
-  if (preflight) {
-    consumeRejectedExecCompletions(preflight);
-  }
   if (preflight?.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
@@ -315,7 +295,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Preflight centralizes trigger classification, event inspection, and monitor-scratch gating.
   if (!preflight) {
     preflight = await resolvePreflight();
-    consumeRejectedExecCompletions(preflight);
   }
   if (preflight.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);

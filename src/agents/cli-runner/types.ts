@@ -96,6 +96,8 @@ export type RunCliAgentParams = {
   sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
   chatType?: ChatType;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */

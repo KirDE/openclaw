@@ -29,6 +29,8 @@ export type EventSessionRoutingPolicy = {
   channel?: string | null;
   accountId?: string | null;
   preserveSessionKey?: boolean;
+  /** Run detached completion inference outside the source conversation transcript. */
+  isolateCompletionRun?: boolean;
 };
 
 type DirectSessionTarget = {

@@ -250,6 +250,7 @@ type CronRunExecutionParams = {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  completionSessionKey?: string;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
   executionRoot?: string;
@@ -701,6 +702,7 @@ function createCronPromptExecutor(
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
+                execCompletionSessionKey: params.completionSessionKey,
                 sessionTarget,
                 sessionEntry: params.cronSession.sessionEntry,
                 contextWindow: params.cronSession.sessionEntry.contextWindow,
@@ -816,6 +818,7 @@ function createCronPromptExecutor(
           preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          execCompletionSessionKey: params.completionSessionKey,
           sessionTarget,
           promptCacheKey,
           agentId: params.agentId,
@@ -973,6 +976,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
     runSessionKey: params.runSessionKey,
+    completionSessionKey: params.completionSessionKey,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
     executionRoot: params.executionRoot,

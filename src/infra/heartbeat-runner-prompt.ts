@@ -54,7 +54,6 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
-  rejectedExecEventEntries: SystemEvent[];
   deferredExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -68,15 +67,13 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
 function partitionExecEventEntries(
   events: readonly SystemEvent[],
   deferRoutedEntries: boolean,
-  allowRoutelessEntries: boolean,
 ): {
   selected: SystemEvent[];
   deferred: SystemEvent[];
-  rejected: SystemEvent[];
 } {
   const selected: SystemEvent[] = [];
   const deferred: SystemEvent[] = [];
-  const rejected: SystemEvent[] = [];
+  const routeless: SystemEvent[] = [];
   let selectedRouteKey: string | undefined;
   for (const event of events) {
     if (!isExecCompletionEvent(event.text) || !event.contextKey?.startsWith("exec:")) {
@@ -84,7 +81,7 @@ function partitionExecEventEntries(
     }
     const context = normalizeDeliveryContext(event.deliveryContext);
     if (!hasDeliveryTargetFields(context)) {
-      (allowRoutelessEntries ? selected : rejected).push(event);
+      routeless.push(event);
       continue;
     }
     const routeKey = channelRouteDedupeKey(context);
@@ -95,7 +92,8 @@ function partitionExecEventEntries(
     selectedRouteKey ??= routeKey;
     (routeKey === selectedRouteKey ? selected : deferred).push(event);
   }
-  return { selected, deferred, rejected };
+  (deferRoutedEntries || selected.length > 0 ? deferred : selected).push(...routeless);
+  return { selected, deferred };
 }
 
 /**
@@ -146,7 +144,6 @@ export async function resolveHeartbeatPreflight(params: {
   const execPartition = partitionExecEventEntries(
     queuedEventEntries,
     (params.scheduledTasks?.length ?? 0) > 0,
-    params.heartbeat?.target === "none",
   );
   const selectedExecEntries = new Set(execPartition.selected);
   const pendingEventEntries = queuedEventEntries.filter(
@@ -189,7 +186,6 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
-    rejectedExecEventEntries: execPartition.rejected,
     deferredExecEventEntries: execPartition.deferred,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,

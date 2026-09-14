@@ -38,6 +38,7 @@ type AttemptToolRunFacts = Pick<
   | "hasRepliedRef"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
+  | "execCompletionSessionKey"
 >;
 
 /**
@@ -96,6 +97,7 @@ export function buildEmbeddedAttemptToolRunContext(
     hasRepliedRef: params.hasRepliedRef,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    execCompletionSessionKey: params.execCompletionSessionKey,
     requesterThinkingLevel: params.thinkLevel,
     trigger: params.trigger,
     jobId: params.jobId,

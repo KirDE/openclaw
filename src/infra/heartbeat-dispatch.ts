@@ -277,6 +277,9 @@ async function prepareHeartbeatDispatchReply(
             ...(wake.heartbeat.accountId !== undefined
               ? { accountId: wake.heartbeat.accountId }
               : {}),
+            ...(wake.heartbeat.isolatedSession !== undefined
+              ? { isolatedSession: wake.heartbeat.isolatedSession }
+              : {}),
           },
         });
       }

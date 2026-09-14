@@ -398,6 +398,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
         intent: "event" as const,
         reason: "exec-event",
         coalesceMs: 0,
+        ...(eventRouting.isolateCompletionRun === true
+          ? { heartbeat: { isolatedSession: true } }
+          : {}),
       },
       eventRouting,
     );

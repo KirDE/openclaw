@@ -14,6 +14,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runHeartbeatOnce } from "../../infra/heartbeat-runner.js";
 import {
   seedMainSessionStore,
+  seedSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "../../infra/heartbeat-runner.test-utils.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -44,10 +45,9 @@ const TOPIC_ID = 47;
 const TOPIC_TARGET = `${TOPIC_CHAT}:topic:${TOPIC_ID}`;
 // The conversation a route-less completion falls back to, per #138316.
 const OWNER_DM = "-100999999999";
-// Cron run keys are agent-scoped, so the exec completion is queued on the
-// agent's main session and relayed by that session's heartbeat.
 const CRON_RUN_SESSION_KEY = "agent:main:cron:topic-cron:run:test-run-id";
 const HEARTBEAT_QUEUE_KEY = "agent:main:main";
+const SOURCE_SESSION_KEY = `agent:main:telegram:group:${TOPIC_CHAT}:topic:${TOPIC_ID}`;
 
 const emptySkillsSnapshot: SkillSnapshot = {
   prompt: "",
@@ -103,6 +103,13 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         lastProvider: "telegram",
         lastTo: OWNER_DM,
       });
+      await seedSessionStore(storePath, SOURCE_SESSION_KEY, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TOPIC_TARGET,
+        lastAccountId: "ops",
+        lastThreadId: TOPIC_ID,
+      });
 
       mockRunCronFallbackPassthrough();
       isCliProviderMock.mockReturnValue(true);
@@ -126,6 +133,7 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         agentDir: tmpDir,
         agentSessionKey: "agent:main:cron:topic-cron",
         runSessionKey: CRON_RUN_SESSION_KEY,
+        completionSessionKey: SOURCE_SESSION_KEY,
         workspaceDir: tmpDir,
         agentVerboseDefault: undefined,
         immutableThinkLevel: undefined,
@@ -201,10 +209,10 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         background: true,
       });
       await expect
-        .poll(() => peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).length, { timeout: 15_000 })
+        .poll(() => peekSystemEventEntries(SOURCE_SESSION_KEY).length, { timeout: 15_000 })
         .toBe(1);
       // Read before the heartbeat consumes the queue entry.
-      const queuedCompletion = peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)[0];
+      const queuedCompletion = peekSystemEventEntries(SOURCE_SESSION_KEY)[0];
 
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: TOPIC_CHAT });
       replySpy.mockResolvedValue({ text: "Backup finished" });
@@ -214,6 +222,8 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         source: "exec-event",
         intent: "event",
         reason: "exec-event",
+        sessionKey: SOURCE_SESSION_KEY,
+        heartbeat: { isolatedSession: true },
         deps: {
           getQueueSize: () => 0,
           getReplyFromConfig: replySpy,
@@ -222,6 +232,9 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
       } as never);
 
       expect(heartbeat.status).toBe("ran");
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        SessionKey: `${SOURCE_SESSION_KEY}:heartbeat`,
+      });
       expect(sendTelegram).toHaveBeenCalledOnce();
       // Pre-fix the completion carried no route and landed on the session's
       // last target (the owner DM) instead of the forum topic.
@@ -238,7 +251,7 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
   }
 });
 
-it("fails closed for a route-less exec completion", async () => {
+it("preserves legacy fallback delivery for a route-less exec completion", async () => {
   resetSystemEventsForTest();
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg = {
@@ -260,7 +273,7 @@ it("fails closed for a route-less exec completion", async () => {
       sessionKey: HEARTBEAT_QUEUE_KEY,
       contextKey: "exec:route-less",
     });
-    const sendTelegram = vi.fn();
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: OWNER_DM });
 
     const heartbeat = await runHeartbeatOnce({
       cfg,
@@ -275,12 +288,9 @@ it("fails closed for a route-less exec completion", async () => {
       },
     } as never);
 
-    expect(heartbeat).toEqual({
-      status: "skipped",
-      reason: "no-pending-event",
-    });
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(heartbeat.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledOnce();
+    expect(sendTelegram.mock.calls[0]?.[0]).toBe(OWNER_DM);
     expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toEqual([]);
   });
 });
@@ -334,7 +344,7 @@ it("partitions routed exec completions instead of dropping either route", async 
     expect(sendTelegram.mock.calls[0]?.[0]).toBe(routes[0]);
     expect(
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(requestHeartbeat).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "exec-event",
@@ -348,11 +358,17 @@ it("partitions routed exec completions instead of dropping either route", async 
     expect(sendTelegram.mock.calls[1]?.[0]).toBe(routes[1]);
     expect(
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
+    ).toHaveLength(1);
+
+    expect((await run()).status).toBe("ran");
+    expect(sendTelegram.mock.calls[2]?.[0]).toBe(OWNER_DM);
+    expect(
+      peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
     ).toEqual([]);
   });
 });
 
-it("drops a route-less completion without suppressing an independent scheduled task", async () => {
+it("defers a route-less completion without suppressing an independent scheduled task", async () => {
   resetSystemEventsForTest();
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg = {
@@ -385,6 +401,6 @@ it("drops a route-less completion without suppressing an independent scheduled t
     expect(heartbeat.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledOnce();
     expect(sendTelegram).toHaveBeenCalledOnce();
-    expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toEqual([]);
+    expect(peekSystemEventEntries(HEARTBEAT_QUEUE_KEY)).toHaveLength(1);
   });
 });
