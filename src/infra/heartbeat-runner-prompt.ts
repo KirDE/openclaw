@@ -54,6 +54,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
+  hasRoutedExecCompletion: boolean;
   deferredExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -156,6 +157,9 @@ export async function resolveHeartbeatPreflight(params: {
     execPartition.selected.length > 0
       ? resolveSystemEventDeliveryContext(execPartition.selected)
       : resolveSystemEventDeliveryContext(pendingEventEntries);
+  const hasRoutedExecCompletion = execPartition.selected.some((event) =>
+    hasDeliveryTargetFields(normalizeDeliveryContext(event.deliveryContext)),
+  );
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -186,6 +190,7 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
+    hasRoutedExecCompletion,
     deferredExecEventEntries: execPartition.deferred,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,

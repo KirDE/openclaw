@@ -77,6 +77,26 @@ describe("selectCronRouteCurrentSessionKey", () => {
     ).toBe(ISOLATED_RUN_KEY);
   });
 
+  it("reuses a matching Telegram topic encoded in the canonical delivery target", () => {
+    const bound = "agent:main:telegram:group:-100123:topic:42";
+    expect(
+      selectCronRouteCurrentSessionKey(
+        job(bound),
+        ISOLATED_RUN_KEY,
+        "telegram",
+        "-100123:topic:42",
+      ),
+    ).toBe(bound);
+    expect(
+      selectCronRouteCurrentSessionKey(
+        job(bound),
+        ISOLATED_RUN_KEY,
+        "telegram",
+        "-100123:topic:43",
+      ),
+    ).toBe(ISOLATED_RUN_KEY);
+  });
+
   it("rejects a matching-provider conversation bound to a different agent", () => {
     const bound = "agent:other:mattermost:group:private-channel:thread:root";
     expect(

@@ -229,6 +229,7 @@ export async function runCronIsolatedAgentTurn(
               agentSessionKey: prepared.context.agentSessionKey,
               runSessionKey: prepared.context.runSessionKey,
               completionSessionKey: prepared.context.completionSessionKey,
+              completionSessionGeneration: prepared.context.completionSessionGeneration,
               usesDetachedRunSession: prepared.context.usesDetachedRunSession,
               workspaceDir: prepared.context.workspaceDir,
               executionRoot: prepared.context.executionRoot,

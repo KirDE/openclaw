@@ -351,9 +351,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     currentSessionKey: sessionKey,
     // A base queue's route stays excluded; events on the actual isolated queue
     // own their route, including exec completion after the base route moves.
-    turnSource: preflight.session.inspectsRunQueue
-      ? preflight.turnSourceDeliveryContext
-      : undefined,
+    turnSource:
+      preflight.session.inspectsRunQueue || preflight.hasRoutedExecCompletion
+        ? preflight.turnSourceDeliveryContext
+        : undefined,
   });
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and

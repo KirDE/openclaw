@@ -227,6 +227,11 @@ type OpenClawCodingToolsOptions = {
   runSessionKey?: string;
   /** Session whose isolated heartbeat owns detached exec completion turns. */
   execCompletionSessionKey?: string;
+  /** Lifecycle of execCompletionSessionKey captured when the cron run was admitted. */
+  execCompletionSessionGeneration?: {
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /**
@@ -716,7 +721,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           channel: options?.messageProvider,
           accountId: options?.agentAccountId,
         }),
-        ...(options?.execCompletionSessionKey ? { isolateCompletionRun: true } : {}),
+        ...(options?.execCompletionSessionKey &&
+        options.execCompletionSessionKey !== (options.runSessionKey ?? options.sessionKey)
+          ? {
+              isolateCompletionRun: true,
+              expectedSessionGeneration: options.execCompletionSessionGeneration,
+              sessionStore: options.config?.session?.store,
+            }
+          : {}),
       },
       messageProvider: options?.messageProvider,
       currentChannelId: options?.currentChannelId,

@@ -91,7 +91,7 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         agents: {
           defaults: {
             workspace: tmpDir,
-            heartbeat: { every: "5m", target: "last" },
+            heartbeat: { every: "5m" },
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
@@ -134,6 +134,8 @@ it("keeps a CLI-backed topic cron's delayed exec completion in the originating t
         agentSessionKey: "agent:main:cron:topic-cron",
         runSessionKey: CRON_RUN_SESSION_KEY,
         completionSessionKey: SOURCE_SESSION_KEY,
+        completionSessionGeneration: { sessionId: "sid", lifecycleRevision: undefined },
+        usesDetachedRunSession: true,
         workspaceDir: tmpDir,
         agentVerboseDefault: undefined,
         immutableThinkLevel: undefined,
@@ -342,6 +344,9 @@ it("partitions routed exec completions instead of dropping either route", async 
 
     expect((await run()).status).toBe("ran");
     expect(sendTelegram.mock.calls[0]?.[0]).toBe(routes[0]);
+    expect(JSON.stringify(replySpy.mock.calls[0]?.[0])).not.toContain(
+      "Exec failed (route-less, code 1)",
+    );
     expect(
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
     ).toHaveLength(2);
@@ -356,12 +361,18 @@ it("partitions routed exec completions instead of dropping either route", async 
 
     expect((await run()).status).toBe("ran");
     expect(sendTelegram.mock.calls[1]?.[0]).toBe(routes[1]);
+    expect(JSON.stringify(replySpy.mock.calls[1]?.[0])).not.toContain(
+      "Exec failed (route-less, code 1)",
+    );
     expect(
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
     ).toHaveLength(1);
 
     expect((await run()).status).toBe("ran");
     expect(sendTelegram.mock.calls[2]?.[0]).toBe(OWNER_DM);
+    expect(JSON.stringify(replySpy.mock.calls[2]?.[0])).toContain(
+      "Exec failed (route-less, code 1)",
+    );
     expect(
       peekSystemEventEntries(HEARTBEAT_QUEUE_KEY).filter((event) => event.text.startsWith("Exec")),
     ).toEqual([]);

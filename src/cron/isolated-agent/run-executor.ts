@@ -65,6 +65,7 @@ import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
+import { resolveCronExecCompletionSessionKey } from "./completion-session-key.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { appendCronDeliveryInstruction } from "./run-delivery-trace.js";
 import {
@@ -251,6 +252,7 @@ type CronRunExecutionParams = {
   agentSessionKey: string;
   runSessionKey: string;
   completionSessionKey?: string;
+  completionSessionGeneration?: { sessionId: string; lifecycleRevision?: string };
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
   executionRoot?: string;
@@ -703,6 +705,7 @@ function createCronPromptExecutor(
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 execCompletionSessionKey: params.completionSessionKey,
+                execCompletionSessionGeneration: params.completionSessionGeneration,
                 sessionTarget,
                 sessionEntry: params.cronSession.sessionEntry,
                 contextWindow: params.cronSession.sessionEntry.contextWindow,
@@ -819,6 +822,7 @@ function createCronPromptExecutor(
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
           execCompletionSessionKey: params.completionSessionKey,
+          execCompletionSessionGeneration: params.completionSessionGeneration,
           sessionTarget,
           promptCacheKey,
           agentId: params.agentId,
@@ -968,6 +972,14 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
+  const completionSessionKey = resolveCronExecCompletionSessionKey({
+    usesDetachedRunSession: params.usesDetachedRunSession === true,
+    runSessionKey: params.runSessionKey,
+    completionSessionKey: params.completionSessionKey,
+  });
+  const completionSessionGeneration = completionSessionKey
+    ? params.completionSessionGeneration
+    : undefined;
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -976,7 +988,8 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
     runSessionKey: params.runSessionKey,
-    completionSessionKey: params.completionSessionKey,
+    completionSessionKey,
+    completionSessionGeneration,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
     executionRoot: params.executionRoot,

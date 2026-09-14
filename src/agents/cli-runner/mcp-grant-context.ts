@@ -151,6 +151,7 @@ export function buildCliMcpGrantContext(params: {
   return {
     sessionKey,
     execCompletionSessionKey: normalizeOptionalMcpContextValue(params.run.execCompletionSessionKey),
+    execCompletionSessionGeneration: params.run.execCompletionSessionGeneration,
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
