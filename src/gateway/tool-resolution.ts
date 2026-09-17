@@ -506,6 +506,8 @@ export function resolveGatewayScopedTools(
                 ask: execDefaults.ask,
                 node: execDefaults.node,
                 elevated: params.bashElevated,
+                notifyOnExit: params.execOverrides?.notifyOnExit,
+                notifyOnExitEmptySuccess: params.execOverrides?.notifyOnExitEmptySuccess,
               }
             : undefined,
           scheduledToolPolicy: params.scheduledToolPolicy,
@@ -574,8 +576,10 @@ export function resolveGatewayScopedTools(
             backgroundMs: execConfig?.backgroundMs,
             timeoutSec: execConfig?.timeoutSec,
             approvalRunningNoticeMs: execConfig?.approvalRunningNoticeMs,
-            notifyOnExit: execConfig?.notifyOnExit,
-            notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
+            notifyOnExit: params.execOverrides?.notifyOnExit ?? execConfig?.notifyOnExit,
+            notifyOnExitEmptySuccess:
+              params.execOverrides?.notifyOnExitEmptySuccess ??
+              execConfig?.notifyOnExitEmptySuccess,
           },
           {
             description:

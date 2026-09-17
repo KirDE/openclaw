@@ -832,6 +832,9 @@ export function createOpenClawCodingToolsInternal(
               security: effectiveExecPolicy.security,
               ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
+              notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+              notifyOnExitEmptySuccess:
+                options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
             },
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
               ? [options.approvalReviewerDeviceId]
