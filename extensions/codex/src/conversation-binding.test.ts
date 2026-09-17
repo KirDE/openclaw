@@ -456,6 +456,37 @@ function conversationThreadStartResult(threadId: string, canAcceptDirectInput?: 
   };
 }
 
+function createCompletingBoundTurnClient(turnStartParams: Record<string, unknown>[]) {
+  let notificationHandler: ((notification: unknown) => void) | undefined;
+  return {
+    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+      if (method === "turn/start") {
+        turnStartParams.push(requestParams);
+        setImmediate(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1" } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    }),
+    addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+      notificationHandler = handler;
+      return () => undefined;
+    }),
+    addRequestHandler: vi.fn(() => () => undefined),
+  };
+}
+
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
   if (!call) {
@@ -1481,13 +1512,12 @@ describe("codex conversation binding", () => {
         client: harness.client,
         release: vi.fn(),
       });
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const startedAt = Date.now();
+      const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
       let resumeAccepted = false;
       const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
         if (method === "thread/read") {
           if (expiresDuring === "preflight") {
-            vi.setSystemTime(startedAt + 1_001);
+            elapsedClock.mockReturnValue(1_001);
           }
           return { thread: response.thread } as never;
         }
@@ -1516,14 +1546,14 @@ describe("codex conversation binding", () => {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   if (expiresDuring === "retention") {
-                    vi.setSystemTime(startedAt + 1_001);
+                    elapsedClock.mockReturnValue(1_001);
                   }
                 }
                 return testCodexAppServerBindingStore.read(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
-                  vi.setSystemTime(startedAt + 1_001);
+                  elapsedClock.mockReturnValue(1_001);
                 }
                 return await testCodexAppServerBindingStore.mutate(...args);
               },
@@ -1553,7 +1583,7 @@ describe("codex conversation binding", () => {
       } finally {
         retry.mockRestore();
         harness.client.close();
-        vi.useRealTimers();
+        elapsedClock.mockRestore();
       }
     },
   );
@@ -3665,35 +3695,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4488,35 +4493,10 @@ describe("codex conversation binding", () => {
       threadId: "thread-1",
       cwd: tempDir,
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4571,35 +4551,10 @@ describe("codex conversation binding", () => {
       networkProxyProfileName: NETWORK_PROXY_PROFILE_NAME,
       networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4817,35 +4772,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4899,35 +4829,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     await expect(
       handleCodexConversationInboundClaim(

@@ -333,9 +333,10 @@ export async function startCodexAttemptTurn(
       );
       const nativeHookRelay = resourceState.nativeHookRelay;
       resourceState.nativeHookRelay = undefined;
-      await runCleanupStep("codex-turn-start-failure-native-hook-relay", () =>
-        nativeHookRelay?.unregister(),
-      );
+      nativeHookRelay?.unregister();
+      await runCleanupStep("codex-turn-start-failure-native-hook-relay", async () => {
+        await nativeHookRelay?.drain();
+      });
       await runCleanupStep(
         "codex-turn-start-failure-sandbox-release",
         releaseSandboxExecEnvironment,
