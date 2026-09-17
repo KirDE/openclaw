@@ -57,16 +57,19 @@ export function resolveCronRouteCompletionSession(params: {
   delivery: { channel?: string; to?: string; threadId?: string | number };
   sessionStore: Record<string, { sessionId: string; lifecycleRevision?: string } | undefined>;
 }) {
-  const hasExplicitDeliveryRoute = Boolean(params.delivery.channel && params.delivery.to);
-  const routeSessionKey = hasExplicitDeliveryRoute
-    ? selectCronRouteCurrentSessionKey(
-        params.job,
-        params.agentSessionKey,
-        params.delivery.channel,
-        params.delivery.to,
-        params.delivery.threadId,
-      )
-    : params.agentSessionKey;
+  const deliveryProvider = params.delivery.channel;
+  const deliveryTarget = params.delivery.to;
+  const hasExplicitDeliveryRoute = Boolean(deliveryProvider && deliveryTarget);
+  const routeSessionKey =
+    deliveryProvider && deliveryTarget
+      ? selectCronRouteCurrentSessionKey(
+          params.job,
+          params.agentSessionKey,
+          deliveryProvider,
+          deliveryTarget,
+          params.delivery.threadId,
+        )
+      : params.agentSessionKey;
   const completion = resolveCronExecCompletionSession({
     usesDetachedRunSession: params.usesDetachedRunSession,
     runSessionKey: params.agentSessionKey,
