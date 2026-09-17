@@ -27,7 +27,6 @@ import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-pref
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -64,6 +63,7 @@ import {
   type NormalizedOutboundPayload,
 } from "./outbound/payloads.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
+import { isSourceGenerationCurrent } from "./source-generation-authority.js";
 import { withSystemEventOwner } from "./system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
@@ -81,32 +81,10 @@ type HeartbeatDispatch = {
 };
 
 function isExecCompletionSourceGenerationCurrent(policy: HeartbeatDispatch): boolean {
-  const expected = policy.wake.preflight.execCompletionSourceGeneration;
-  if (!expected) {
-    return true;
-  }
-  try {
-    const agentId = resolveAgentIdFromSessionKey(expected.sessionKey, policy.wake.agentId);
-    if (agentId !== policy.wake.agentId) {
-      return false;
-    }
-    const storePath = resolveSessionStorePathCore(expected.sessionStore, { agentId });
-    const current = loadExactSessionEntryReadOnly({
-      agentId,
-      storePath,
-      sessionKey: expected.sessionKey,
-      clone: false,
-    })?.entry;
-    return (
-      current?.sessionId === expected.sessionId &&
-      current.lifecycleRevision === expected.lifecycleRevision
-    );
-  } catch (error) {
-    log.warn("heartbeat: exec completion source validation failed", {
-      error: formatErrorMessage(error),
-    });
-    return false;
-  }
+  return isSourceGenerationCurrent(
+    policy.wake.preflight.execCompletionSourceGeneration,
+    policy.wake.agentId,
+  );
 }
 
 export function createHeartbeatDispatch(
@@ -628,6 +606,7 @@ export async function deliverHeartbeatDispatch(
       signal,
       silent: policy.deliverySilent,
       onDeliveredPayload,
+      sourceGeneration: policy.wake.preflight.execCompletionSourceGeneration,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
