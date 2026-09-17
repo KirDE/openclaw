@@ -1,5 +1,5 @@
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../plugin-sdk/test-fixtures.js";
 import {
   dispatchCronDeliveryMock,
   runCliAgentMock,
