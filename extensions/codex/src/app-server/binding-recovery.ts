@@ -3,6 +3,7 @@ import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
+  CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
 type PhysicalThreadOwner = {
@@ -51,7 +52,7 @@ export async function clearCodexBindingAfterContextOverflow(params: {
 
 export function canClearCodexBindingForRecovery(params: {
   expectedSessionRuntimeOwnership?: unknown;
-  thread: PhysicalThreadOwner;
+  thread: CodexAppServerThreadBinding;
   operation: string;
 }): boolean {
   if (params.expectedSessionRuntimeOwnership) {
