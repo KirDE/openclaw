@@ -192,11 +192,7 @@ type CodexAppServerBindingMutation =
       kind: "reclaim-generation";
       expectedPreviousSessionId: string;
     }
-  | {
-      kind: "clear";
-      threadId?: string;
-      clientId?: string;
-    };
+  | { kind: "clear"; threadId?: string; clientId?: string };
 
 export type CodexSessionGenerationAdoptionResult = "adopted" | "current" | "absent" | "conflict";
 

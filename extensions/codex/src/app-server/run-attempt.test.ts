@@ -31,7 +31,6 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -65,6 +64,13 @@ import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  createGoogleCalendarRequest,
+  googleCalendarAppInfo,
+  GOOGLE_CALENDAR_PLUGIN_CONFIG,
+  type GoogleCalendarCacheKeyInput,
+  primeGoogleCalendarAppInventory,
+} from "./google-calendar.test-helpers.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -624,152 +630,6 @@ function openRunSession(sessionFile: string) {
 function createRunParams() {
   const { sessionFile, workspaceDir } = createRunPaths();
   return createParams(sessionFile, workspaceDir);
-}
-
-const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
-  codexPlugins: {
-    enabled: true,
-    plugins: {
-      "google-calendar": {
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    },
-  },
-} as const;
-
-type GoogleCalendarCacheKeyInput = {
-  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
-  agentDir: string;
-};
-
-function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
-  return {
-    id: "google-calendar-app",
-    name: "Google Calendar",
-    description: null,
-    logoUrl: null,
-    logoUrlDark: null,
-    distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
-    installUrl: null,
-    isAccessible: true,
-    isEnabled,
-    pluginDisplayNames: [],
-  };
-}
-
-const GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT = {
-  marketplaces: [
-    {
-      name: "openai-curated",
-      path: "/marketplaces/openai-curated",
-      interface: null,
-      plugins: [
-        {
-          id: "google-calendar",
-          name: "google-calendar",
-          source: { type: "remote" },
-          installed: true,
-          enabled: true,
-          installPolicy: "AVAILABLE",
-          authPolicy: "ON_USE",
-          availability: "AVAILABLE",
-          interface: null,
-        },
-      ],
-    },
-  ],
-  marketplaceLoadErrors: [],
-} satisfies v2.PluginInstalledResponse;
-
-const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
-  ...GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT,
-  featuredPluginIds: [],
-} satisfies v2.PluginListResponse;
-
-const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
-  plugin: {
-    marketplaceName: "openai-curated",
-    marketplacePath: "/marketplaces/openai-curated",
-    summary: {
-      id: "google-calendar",
-      name: "google-calendar",
-      source: { type: "remote" },
-      installed: true,
-      enabled: true,
-      installPolicy: "AVAILABLE",
-      authPolicy: "ON_USE",
-      availability: "AVAILABLE",
-      interface: null,
-    },
-    description: null,
-    skills: [],
-    apps: [
-      {
-        id: "google-calendar-app",
-        name: "Google Calendar",
-        description: null,
-        installUrl: null,
-        category: null,
-      },
-    ],
-    mcpServers: ["google-calendar"],
-  },
-} as const;
-
-function createGoogleCalendarRequest(
-  appInventory?: (method: "app/installed" | "app/read") => unknown,
-) {
-  let threadAppEnabled = false;
-  return vi.fn(async (method: string, params?: unknown) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
-      return { config: {}, layers: [] };
-    }
-    if (
-      method === "app/installed" &&
-      typeof (params as { threadId?: unknown } | undefined)?.threadId === "string"
-    ) {
-      return codexAppInventoryResponse("app/installed", [googleCalendarAppInfo(threadAppEnabled)]);
-    }
-    if ((method === "app/installed" || method === "app/read") && appInventory) {
-      return appInventory(method);
-    }
-    if (method === "plugin/installed") {
-      return GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT;
-    }
-    if (method === "plugin/list") {
-      return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
-    }
-    if (method === "plugin/read") {
-      return GOOGLE_CALENDAR_PLUGIN_READ_RESULT;
-    }
-    if (method === "thread/start") {
-      const config = (params as { config?: { apps?: Record<string, { enabled?: boolean }> } })
-        ?.config;
-      threadAppEnabled = config?.apps?.["google-calendar-app"]?.enabled === true;
-      return threadStartResult("thread-1");
-    }
-    if (method === "turn/start") {
-      return turnStartResult("turn-1", "inProgress");
-    }
-    return undefined;
-  });
-}
-
-async function primeGoogleCalendarAppInventory(key: string, isEnabled: boolean): Promise<void> {
-  defaultCodexAppInventoryCache.clear();
-  await defaultCodexAppInventoryCache.refreshNow({
-    key,
-    request: async (method, params) =>
-      codexAppInventoryResponse(method, [googleCalendarAppInfo(isEnabled)], params),
-  });
 }
 
 async function writeTokenPressureState(

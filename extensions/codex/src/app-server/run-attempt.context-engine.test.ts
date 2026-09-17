@@ -25,15 +25,18 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   assistantMessage,
-  createParams as createSharedParams,
   createStartedThreadHarness as createSharedStartedThreadHarness,
-  runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import {
+  createContextEngineAttemptParams as createParams,
+  runContextEngineCodexAttempt as runCodexAppServerAttempt,
+  withPersistentCodexTestToolPolicy,
+} from "./run-attempt.context-engine.test-helpers.js";
 import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
@@ -43,51 +46,6 @@ import * as sharedClientModule from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const params = createSharedParams(sessionFile, workspaceDir);
-  delete params.contextTokenBudget;
-  delete params.contextWindowInfo;
-  delete params.observeToolTerminal;
-  return params;
-}
-
-/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
-function withPersistentCodexTestToolPolicy(
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams {
-  const modelCompat =
-    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
-  const model = {
-    ...params.model,
-    compat: { ...modelCompat, supportsTools: false },
-  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-  return {
-    ...params,
-    disableTools: false,
-    model,
-    config: {
-      ...params.config,
-      tools: {
-        ...params.config?.tools,
-        web: {
-          ...params.config?.tools?.web,
-          search: {
-            ...params.config?.tools?.web?.search,
-            enabled: false,
-          },
-        },
-      },
-    },
-  };
-}
-
-function runCodexAppServerAttempt(
-  params: EmbeddedRunAttemptParams,
-  options: Parameters<typeof runSharedCodexAppServerAttempt>[1] = {},
-) {
-  return runSharedCodexAppServerAttempt(withPersistentCodexTestToolPolicy(params), options);
-}
 
 async function createSqliteParams(
   workspaceDir: string,

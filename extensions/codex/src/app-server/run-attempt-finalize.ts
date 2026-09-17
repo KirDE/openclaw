@@ -16,6 +16,11 @@ import {
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
+import {
+  canClearCodexBindingForRecovery,
+  clearCodexBindingAfterContextOverflow,
+  clearCodexBindingForPhysicalClient,
+} from "./binding-recovery.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
@@ -34,7 +39,6 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
@@ -77,21 +81,12 @@ export async function finalizeCodexAttempt(
     startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
-  const canClearBindingForRecovery = (operation: string) => {
-    if (params.expectedSessionRuntimeOwnership) {
-      // Optional recovery preserves both native ownership and the completed turn's outcome.
-      embeddedAgentLog.warn(
-        "codex app-server preserved native binding instead of recovery rotation",
-        {
-          threadId: resourceState.thread.threadId,
-          operation,
-        },
-      );
-      return false;
-    }
-    assertCodexBindingMayBeReplaced(resourceState.thread, operation);
-    return true;
-  };
+  const canClearBindingForRecovery = (operation: string) =>
+    canClearCodexBindingForRecovery({
+      expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
+      thread: resourceState.thread,
+      operation,
+    });
   const { state, completion, deadlines, settlementExpired } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
@@ -220,25 +215,14 @@ export async function finalizeCodexAttempt(
       }) &&
       canClearBindingForRecovery("clearing a native context after overflow")
     ) {
-      embeddedAgentLog.warn(
-        "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
-        {
-          threadId: resourceState.thread.threadId,
-          turnId: activeTurnId,
-          error: enrichedPromptErrorMessage,
-        },
-      );
-      if (resourceState.thread.clientId) {
-        await bindingStore.mutate(
-          bindingIdentity,
-          {
-            kind: "clear",
-            threadId: resourceState.thread.threadId,
-            clientId: resourceState.thread.clientId,
-          },
-          connection.assertCurrent,
-        );
-      }
+      await clearCodexBindingAfterContextOverflow({
+        bindingStore,
+        bindingIdentity,
+        thread: resourceState.thread,
+        turnId: activeTurnId,
+        error: enrichedPromptErrorMessage,
+        assertCurrent: connection.assertCurrent,
+      });
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client: resourceState.client,
@@ -638,15 +622,12 @@ export async function finalizeCodexAttempt(
           resourceState.thread.clientId &&
           canClearBindingForRecovery("clearing native coverage after a completed turn")
         ) {
-          const cleared = await bindingStore.mutate(
+          const cleared = await clearCodexBindingForPhysicalClient({
+            bindingStore,
             bindingIdentity,
-            {
-              kind: "clear",
-              threadId: resourceState.thread.threadId,
-              clientId: resourceState.thread.clientId,
-            },
-            connection.assertCurrent,
-          );
+            thread: resourceState.thread,
+            assertCurrent: connection.assertCurrent,
+          });
           if (!cleared) {
             throw error;
           }
