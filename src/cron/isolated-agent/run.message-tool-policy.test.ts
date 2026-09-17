@@ -1051,12 +1051,20 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
+    const sourceSessionKey = "agent:default:messagechat:direct:123";
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: { [sourceSessionKey]: makeCronSessionEntry({ sessionId: "source-session" }) },
+      }),
+    );
+    const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
+    job.sessionKey = sourceSessionKey;
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
-      job: makeAnnounceMessageToolJob(),
+      job: job as never,
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
