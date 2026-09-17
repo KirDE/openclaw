@@ -51,6 +51,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Lifecycle-prepared canonical recipient; never a scope or authorization grant. */
+  preparedRecipientProfileId?: string;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -64,6 +66,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI operator ingress; never accepted from wire params. */
+    authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
     controlUiAdmin?: true;
     approvalRuntime?: boolean;

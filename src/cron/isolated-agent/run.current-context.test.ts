@@ -176,6 +176,10 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
       expect.objectContaining({
         execCompletionSessionKey: undefined,
         execCompletionSessionGeneration: undefined,
+        execOverrides: {
+          notifyOnExit: false,
+          notifyOnExitEmptySuccess: false,
+        },
       }),
     );
   });

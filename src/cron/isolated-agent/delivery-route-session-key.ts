@@ -57,20 +57,28 @@ export function resolveCronRouteCompletionSession(params: {
   delivery: { channel?: string; to?: string; threadId?: string | number };
   sessionStore: Record<string, { sessionId: string; lifecycleRevision?: string } | undefined>;
 }) {
-  const routeSessionKey =
-    params.delivery.channel && params.delivery.to
-      ? selectCronRouteCurrentSessionKey(
-          params.job,
-          params.agentSessionKey,
-          params.delivery.channel,
-          params.delivery.to,
-          params.delivery.threadId,
-        )
-      : params.agentSessionKey;
-  return resolveCronExecCompletionSession({
+  const hasExplicitDeliveryRoute = Boolean(params.delivery.channel && params.delivery.to);
+  const routeSessionKey = hasExplicitDeliveryRoute
+    ? selectCronRouteCurrentSessionKey(
+        params.job,
+        params.agentSessionKey,
+        params.delivery.channel,
+        params.delivery.to,
+        params.delivery.threadId,
+      )
+    : params.agentSessionKey;
+  const completion = resolveCronExecCompletionSession({
     usesDetachedRunSession: params.usesDetachedRunSession,
     runSessionKey: params.agentSessionKey,
     completionSessionKey: params.sourceSessionKey ?? routeSessionKey,
     sessionStore: params.sessionStore,
   });
+  return {
+    ...completion,
+    // A routed detached completion must never fall back to shared-main inference.
+    // If the route has no saved source generation, suppress its later exec event;
+    // genuinely routeless producers retain the legacy fallback.
+    rejectDetachedCompletion:
+      params.usesDetachedRunSession && hasExplicitDeliveryRoute && !completion.sessionKey,
+  };
 }

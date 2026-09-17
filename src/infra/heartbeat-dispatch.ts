@@ -27,6 +27,7 @@ import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-pref
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -40,8 +41,9 @@ import { formatErrorMessage } from "./errors.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
 import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
-import { heartbeatLog as log, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
+import { resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
   HeartbeatRunOptions,
   PreparedHeartbeatRun,
@@ -74,8 +76,38 @@ type HeartbeatDispatch = {
   deliveryReason?: string;
   deliverySilent?: boolean;
   projectTarget?: boolean;
+  sourceGenerationInvalidated?: boolean;
   prepareReply: NonNullable<ReplyOperationRunState["heartbeat"]>["prepareReply"];
 };
+
+function isExecCompletionSourceGenerationCurrent(policy: HeartbeatDispatch): boolean {
+  const expected = policy.wake.preflight.execCompletionSourceGeneration;
+  if (!expected) {
+    return true;
+  }
+  try {
+    const agentId = resolveAgentIdFromSessionKey(expected.sessionKey, policy.wake.agentId);
+    if (agentId !== policy.wake.agentId) {
+      return false;
+    }
+    const storePath = resolveSessionStorePathCore(expected.sessionStore, { agentId });
+    const current = loadExactSessionEntryReadOnly({
+      agentId,
+      storePath,
+      sessionKey: expected.sessionKey,
+      clone: false,
+    })?.entry;
+    return (
+      current?.sessionId === expected.sessionId &&
+      current.lifecycleRevision === expected.lifecycleRevision
+    );
+  } catch (error) {
+    log.warn("heartbeat: exec completion source validation failed", {
+      error: formatErrorMessage(error),
+    });
+    return false;
+  }
+}
 
 export function createHeartbeatDispatch(
   opts: HeartbeatRunOptions,
@@ -493,6 +525,19 @@ async function prepareHeartbeatDispatchReply(
       heartbeatReply: true,
     }),
     settle: async (result) => {
+      if (policy.sourceGenerationInvalidated) {
+        await suppressSelected();
+        finish(
+          {
+            status: "skipped",
+            reason: "source-session-replaced",
+            channel,
+            silent: true,
+          },
+          true,
+        );
+        return;
+      }
       const sent = result === "delivered";
       if (!sent) {
         await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
@@ -548,6 +593,11 @@ export async function deliverHeartbeatDispatch(
   const { cfg, agentId, startedAt } = policy.wake;
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey } = policy.prepared;
   if (delivery.channel === "none" || !delivery.to) {
+    return { visibleReplySent: false };
+  }
+  if (!isExecCompletionSourceGenerationCurrent(policy)) {
+    policy.sourceGenerationInvalidated = true;
+    policy.deliveryReason = "source-session-replaced";
     return { visibleReplySent: false };
   }
   const onDeliveredPayload = policy.projectTarget

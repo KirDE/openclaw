@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
+import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type EventSessionRoutingPolicy,
@@ -407,6 +408,20 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionKey: eventSessionKey,
     contextKey: `exec:${session.id}`,
     deliveryContext: session.notifyDeliveryContext,
+    ...(expectedGeneration
+      ? {
+          sourceGeneration: {
+            sessionKey,
+            sessionId: expectedGeneration.sessionId,
+            ...(expectedGeneration.lifecycleRevision !== undefined
+              ? { lifecycleRevision: expectedGeneration.lifecycleRevision }
+              : {}),
+            ...(eventRouting.sessionStore !== undefined
+              ? { sessionStore: eventRouting.sessionStore }
+              : {}),
+          },
+        }
+      : {}),
   };
   const remove = enqueueSystemEventWithReceipt(
     eventText,
@@ -844,6 +859,7 @@ export async function runExecProcess({
         timedOut: outcome.timedOut,
       });
     } catch (error) {
+      session.finalizationFailed = true;
       recordAgentCleanupFailure();
       if (outcome.status === "completed") {
         finalOutcome = buildExecRuntimeErrorOutcome({
@@ -877,6 +893,7 @@ export async function runExecProcess({
           maybeNotifyOnExit(session, finalOutcome.status);
         }
       } catch (error) {
+        session.finalizationFailed = true;
         // Recover before yielding: scope joins queued by markExited must not
         // outrun the task's failed outcome or restore its environment state.
         finalOutcome = buildExecRuntimeErrorOutcome({
@@ -1048,6 +1065,7 @@ export async function runExecProcess({
     assertSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
+  recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
 

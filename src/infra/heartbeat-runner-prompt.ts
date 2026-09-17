@@ -13,6 +13,7 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { formatErrorMessage } from "./errors.js";
+import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -21,11 +22,10 @@ import {
   isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
 import {
-  heartbeatLog as log,
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
-  type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import { resolveHeartbeatSessionSelection } from "./heartbeat-runner-session.js";
 import {
@@ -42,6 +42,7 @@ import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
+  type SystemEventSourceGeneration,
 } from "./system-events.js";
 
 export function truncateHeartbeatPreview(value: string | undefined): string | undefined {
@@ -55,6 +56,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   hasRoutedExecCompletion: boolean;
+  execCompletionSourceGeneration?: SystemEventSourceGeneration;
   deferredExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
@@ -85,7 +87,9 @@ function partitionExecEventEntries(
       routeless.push(event);
       continue;
     }
-    const routeKey = channelRouteDedupeKey(context);
+    const routeKey = `${channelRouteDedupeKey(context)}\u0000${JSON.stringify(
+      event.sourceGeneration ?? null,
+    )}`;
     if (deferRoutedEntries) {
       deferred.push(event);
       continue;
@@ -160,6 +164,7 @@ export async function resolveHeartbeatPreflight(params: {
   const hasRoutedExecCompletion = execPartition.selected.some((event) =>
     hasDeliveryTargetFields(normalizeDeliveryContext(event.deliveryContext)),
   );
+  const execCompletionSourceGeneration = execPartition.selected[0]?.sourceGeneration;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -191,6 +196,7 @@ export async function resolveHeartbeatPreflight(params: {
     pendingEventEntries,
     turnSourceDeliveryContext,
     hasRoutedExecCompletion,
+    ...(execCompletionSourceGeneration ? { execCompletionSourceGeneration } : {}),
     deferredExecEventEntries: execPartition.deferred,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
@@ -250,6 +256,7 @@ export async function resolveHeartbeatPreflight(params: {
 
 type HeartbeatPromptResolution = {
   prompt: string;
+  hasTaskContinuation: boolean;
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
@@ -302,6 +309,9 @@ export function resolveHeartbeatRunPrompt(params: {
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
   const hasCronEvents = cronEvents.length > 0;
+  const hasBackgroundTaskEvent =
+    params.preflight.session.inspectsRunQueue &&
+    genericEvents.some((event) => event.contextKey?.startsWith("task:"));
   if (params.scheduledTasks.length > 0) {
     const taskList = params.scheduledTasks
       .map((task) => `- ${task.name}: ${task.prompt}`)
@@ -317,6 +327,7 @@ ${completionInstruction}`;
     const prompt = appendHeartbeatScratch(taskPrompt, params.heartbeatScratchContent);
     return {
       prompt,
+      hasTaskContinuation: hasBackgroundTaskEvent,
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
@@ -352,6 +363,10 @@ ${completionInstruction}`;
   );
   return {
     prompt: basePromptWithDirectives,
+    hasTaskContinuation:
+      hasExecCompletion ||
+      hasBackgroundTaskEvent ||
+      cronEvents.some((event) => event.contextKey?.startsWith("task:")),
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
