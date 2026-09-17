@@ -1535,7 +1535,6 @@ src/acp/event-mapper.ts	1
 src/acp/permission-relay.ts	1
 src/acp/persistent-bindings.types.ts	3
 src/acp/runtime/registry.ts	2
-src/acp/runtime/session-meta.ts	2
 src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
@@ -1635,7 +1634,7 @@ src/agents/code-mode.ts	2
 src/agents/code-mode.worker.ts	7
 src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	7
-src/agents/command/attempt-execution.ts	3
+src/agents/command/attempt-execution.ts	1
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -3399,7 +3398,6 @@ src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	12
 src/skills/lifecycle/install-download.ts	4
-src/skills/lifecycle/install.ts	1
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/config.ts	1
