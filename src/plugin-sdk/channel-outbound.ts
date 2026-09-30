@@ -271,7 +271,7 @@ function stripPluginSourceGeneration(
   params: DurableMessageSendContextParams,
 ): DurableMessageSendContextParams {
   const safe = { ...params };
-  delete (safe as typeof safe & { sourceGeneration?: unknown }).sourceGeneration;
+  Reflect.deleteProperty(safe, "sourceGeneration");
   return safe;
 }
 

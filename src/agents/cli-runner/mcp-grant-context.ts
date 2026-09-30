@@ -196,7 +196,7 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
-    execCompletionSessionKey: normalizeOptionalMcpContextValue(params.run.execCompletionSessionKey),
+    execCompletionSessionKey: normalizeOptionalString(params.run.execCompletionSessionKey),
     execCompletionSessionGeneration: params.run.execCompletionSessionGeneration,
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),

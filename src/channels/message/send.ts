@@ -203,6 +203,10 @@ export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   onSendFailure?: (error: unknown) => Promise<void> | void;
 };
 
+/** Host-owned source custody is accepted by core, never by plugin-facing send parameters. */
+type HostDurableMessageSendContextParams = DurableMessageSendContextParams &
+  Pick<DeliverOutboundPayloadsParams, "sourceGeneration">;
+
 export type DurableMessageSendContext = MessageSendContext<
   ReplyPayload,
   DurableMessageBatchSendResult
@@ -223,7 +227,7 @@ export async function withDurableMessageSendContextCore<T>(
 }
 
 async function withMessageSendContext<T>(
-  params: DurableMessageSendContextParams,
+  params: HostDurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
   deliver: typeof deliverOutboundPayloadsInternal,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
@@ -388,7 +392,7 @@ async function withMessageSendContext<T>(
 }
 
 export async function sendDurableMessageBatchCore(
-  params: DurableMessageSendContextParams,
+  params: HostDurableMessageSendContextParams,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
   sessionGeneration?: SessionDeliveryGeneration,
@@ -416,7 +420,7 @@ export async function sendStructuredDurableMessageBatchCore(
 }
 
 async function sendMessageBatch(
-  params: DurableMessageSendContextParams,
+  params: HostDurableMessageSendContextParams,
   deliver: typeof deliverOutboundPayloadsInternal,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
 ): Promise<DurableMessageBatchSendResult> {
