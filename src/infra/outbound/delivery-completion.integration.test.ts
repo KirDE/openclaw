@@ -128,6 +128,43 @@ describe("pending-final durable delivery completion", () => {
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
+  it("fences source revocation during awaited dispatch immediately before adapter I/O", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:matrix:group:room:topic:18";
+    const source = { agentId: "main", sessionKey, storePath };
+    await replaceSessionEntry(source, {
+      sessionId: "source-1",
+      lifecycleRevision: "revision-1",
+      updatedAt: 1,
+    });
+    const sendMatrix = vi.fn(async () => ({ messageId: "must-not-send" }));
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "revoked completion" }],
+        deps: { matrix: sendMatrix },
+        skipQueue: true,
+        sourceGeneration: {
+          sessionKey,
+          sessionId: "source-1",
+          lifecycleRevision: "revision-1",
+          sessionStore: storePath,
+        },
+        onPlatformSendDispatch: async () => {
+          await replaceSessionEntry(source, {
+            sessionId: "source-2",
+            lifecycleRevision: "revision-2",
+            updatedAt: 2,
+          });
+        },
+      }),
+    ).rejects.toThrow("source session generation is no longer current");
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
   it.each(["global", "unknown"])(
     "retains the selected owner through a queued %s final and settlement",
     async (sessionKey) => {
