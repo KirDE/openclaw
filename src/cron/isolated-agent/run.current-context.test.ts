@@ -11,6 +11,9 @@ import {
   resolveCronSessionMock,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
+  isCliProviderMock,
+  resolveConfiguredModelRefMock,
+  runCliAgentMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -183,4 +186,52 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
       }),
     );
   });
+
+  it.each(["embedded", "cli"])(
+    "keeps standalone explicit-route exec notifications for %s runs",
+    async (runtime) => {
+      mockRunCronFallbackPassthrough();
+      if (runtime === "cli") {
+        isCliProviderMock.mockImplementation((provider: string) => provider === "test-cli");
+        resolveConfiguredModelRefMock.mockReturnValue({
+          provider: "test-cli",
+          model: "test-model",
+        });
+        runCliAgentMock.mockResolvedValue({
+          payloads: [{ text: "done" }],
+          meta: { agentMeta: {} },
+        });
+      }
+      resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, mode: "announce" });
+      resolveDeliveryTargetMock.mockResolvedValue({
+        ok: true,
+        channel: "telegram",
+        to: "-100123:topic:42",
+        threadId: 42,
+        mode: "explicit",
+      });
+      const cronSession = makeCronSession({ store: {} });
+      resolveCronSessionMock.mockReturnValue(cronSession);
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
+            delivery: { mode: "announce", channel: "telegram", to: "-100123:topic:42" },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(runtime === "cli" ? runCliAgentMock : runEmbeddedAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          execCompletionSessionKey: "agent:default:cron:test",
+          execCompletionSessionGeneration: {
+            sessionId: cronSession.sessionEntry.sessionId,
+            lifecycleRevision: cronSession.sessionEntry.lifecycleRevision,
+          },
+          execOverrides: undefined,
+        }),
+      );
+    },
+  );
 });

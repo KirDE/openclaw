@@ -53,6 +53,7 @@ export function resolveCronRouteCompletionSession(params: {
   job: CronJob;
   agentSessionKey: string;
   sourceSessionKey?: string;
+  standaloneRunGeneration: { sessionId: string; lifecycleRevision?: string };
   usesDetachedRunSession: boolean;
   delivery: { channel?: string; to?: string; threadId?: string | number };
   sessionStore: Record<string, { sessionId: string; lifecycleRevision?: string } | undefined>;
@@ -76,12 +77,26 @@ export function resolveCronRouteCompletionSession(params: {
     completionSessionKey: params.sourceSessionKey ?? routeSessionKey,
     sessionStore: params.sessionStore,
   });
+  // A standalone automation has no source conversation to revoke. Its own
+  // persisted cron generation owns the completion, not an unrelated main chat.
+  const standaloneCompletion =
+    params.usesDetachedRunSession &&
+    hasExplicitDeliveryRoute &&
+    !params.job.sessionKey?.trim() &&
+    !params.sourceSessionKey
+      ? {
+          sessionKey: params.agentSessionKey,
+          generation: params.standaloneRunGeneration,
+        }
+      : undefined;
+  const owner = standaloneCompletion ?? completion;
   return {
-    ...completion,
+    ...owner,
     // A routed detached completion must never fall back to shared-main inference.
-    // If the route has no saved source generation, suppress its later exec event;
-    // genuinely routeless producers retain the legacy fallback.
+    // If a bound route has no saved source generation, suppress its later exec
+    // event; standalone jobs use their cron generation instead. Genuinely
+    // routeless producers retain the legacy fallback.
     rejectDetachedCompletion:
-      params.usesDetachedRunSession && hasExplicitDeliveryRoute && !completion.sessionKey,
+      params.usesDetachedRunSession && hasExplicitDeliveryRoute && !owner.sessionKey,
   };
 }

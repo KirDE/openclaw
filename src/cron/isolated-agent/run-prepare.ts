@@ -518,6 +518,10 @@ export async function prepareCronRunContext(params: {
       agentSessionKey,
       sourceSessionKey,
       usesDetachedRunSession,
+      standaloneRunGeneration: {
+        sessionId: cronSession.sessionEntry.sessionId,
+        lifecycleRevision: cronSession.sessionEntry.lifecycleRevision,
+      },
       delivery: resolvedDelivery,
       sessionStore: cronSession.store,
     });
