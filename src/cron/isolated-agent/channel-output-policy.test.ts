@@ -18,7 +18,7 @@ const channelPluginMocks = vi.hoisted(() => ({
         }: {
           to: string;
           threadId?: string | number | null;
-        }) => (threadId == null ? to : `${to}#${threadId}`),
+        }) => (threadId == null ? "normalized:" + to : `${to}#${threadId}`),
       },
       outbound: {
         preferFinalAssistantVisibleText: true,
@@ -45,11 +45,16 @@ describe("cron channel output policy", () => {
     });
   });
 
-  it("keeps unthreaded targets without loading the channel plugin", async () => {
-    channelPluginMocks.getChannelPlugin.mockClear();
+  it("lets a channel normalize an unthreaded current target", async () => {
     await expect(resolveCurrentChannelTarget({ channel: "topicchat", to: "room" })).resolves.toBe(
-      "room",
+      "normalized:room",
     );
+    expect(channelPluginMocks.getChannelPlugin).toHaveBeenCalledWith("topicchat");
+  });
+
+  it("does not load a plugin when the route has no channel or target", async () => {
+    await expect(resolveCurrentChannelTarget({ channel: "topicchat" })).resolves.toBeUndefined();
+    await expect(resolveCurrentChannelTarget({ to: "room" })).resolves.toBe("room");
     expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
   });
 

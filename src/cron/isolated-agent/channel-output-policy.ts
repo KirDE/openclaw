@@ -36,7 +36,7 @@ export async function resolveCurrentChannelTarget(params: {
     return undefined;
   }
   const channelId = normalizeOptionalLowercaseString(params.channel);
-  if (!channelId || params.threadId == null) {
+  if (!channelId) {
     return params.to;
   }
   const { getChannelPlugin } = await channelPluginRuntimeLoader.load();
