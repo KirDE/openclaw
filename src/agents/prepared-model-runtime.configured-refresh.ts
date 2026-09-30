@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   ownerKey,
   prepareModelRuntimeOwner,
@@ -28,6 +29,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     gatewayLifecycleActive: boolean;
     isPublicationCurrent: () => boolean;
     acquisitionSignal: AbortSignal;
+    onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
@@ -60,6 +62,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
       owners.delete(key);
+      retirePreparedModelRuntimeGeneration(owner);
       releasePreparedPluginPublication(owner);
     }
   }
@@ -72,6 +75,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
+    owner.onPluginGenerationRetired = () => context.onPluginGenerationRetired(owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );

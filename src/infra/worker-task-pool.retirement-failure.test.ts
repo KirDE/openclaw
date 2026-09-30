@@ -5,25 +5,29 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+import * as nativeSections from "./worker-task-native-sections.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
+
+type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
 
 type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: { taskId: number; responseId?: number }) => void>>;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     parentPort: null,
     Worker: class extends EventEmitter {
       constructor() {
         super();
         workers.push(this);
       }
-      postMessage = vi.fn<(message: { taskId: number; responseId?: number }) => void>();
+      postMessage = vi.fn<(message: PostedTask) => void>();
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -33,7 +37,10 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-vi.mock("node:os", () => ({ availableParallelism: () => 2 }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 2,
+}));
 vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerThreadExecArgv: () => [] }));
 vi.mock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
 
@@ -63,6 +70,55 @@ afterEach(async () => {
 });
 
 describe("worker task retirement failures", () => {
+  it("settles cancellation when native work finishes before its settlement wait is registered", async () => {
+    const pool = createOwnedWorkerTaskPool<string, string>({
+      workerUrl: new URL("data:text/javascript,"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    });
+    const controller = new AbortController();
+    const reason = new Error("cancel native work");
+    const executionSettled = vi.fn();
+    const result = pool
+      .run("input", { signal: controller.signal, onExecutionSettled: executionSettled })
+      .catch((error: unknown) => error);
+    const worker = expectDefined(workers[0], "task worker");
+    const state = new Int32Array(
+      expectDefined(worker.postMessage.mock.calls[0]?.[0].nativeSections, "native section state"),
+    );
+    const release = nativeSections.withWorkerTaskNativeSectionScope(
+      state,
+      () => true,
+      nativeSections.retainCurrentWorkerNativeSection,
+    );
+    const isSettled = nativeSections.areWorkerNativeSectionsSettled;
+    const observed = vi
+      .spyOn(nativeSections, "areWorkerNativeSectionsSettled")
+      .mockImplementationOnce((sections) => {
+        const settled = isSettled(sections);
+        // The worker can release its last section after the parent's atomic read.
+        release();
+        return settled;
+      });
+    try {
+      controller.abort(reason);
+      await yieldToEventLoop();
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      observed.mockRestore();
+      release();
+      // Explicit servicing also cleans up the deliberately stalled pre-fix owner.
+      const rotation = pool.startRotate();
+      rotation.service();
+      await rotation.result;
+      await pool.close();
+      await result;
+    }
+  });
+
   it.each([false, true])(
     "joins every retirement retry and its artifacts before rejecting (second retry fails: %s)",
     async (secondRetryFails) => {
@@ -413,6 +469,41 @@ describe("worker task retirement failures", () => {
       expect(executionSettled).toHaveBeenCalledTimes(2);
       expect(order).toEqual(["settled:false", "successor", "settled:false"]);
       expect(options.onExecutionSettled).toBe(executionSettled);
+    },
+  );
+  it.each(["ok", "failed"] as const)(
+    "preserves public result error precedence when settlement callback throws after %s",
+    async (outcome) => {
+      const pool = createPool();
+      const callbackFailure = new Error("settlement callback failed");
+      const executionSettled = vi.fn(() => {
+        throw callbackFailure;
+      });
+      const first = pool
+        .run("first", { onExecutionSettled: executionSettled })
+        .catch((error: unknown) => error);
+      const worker = expectDefined(workers[0], "task worker");
+      worker.emit(
+        "message",
+        outcome === "ok"
+          ? { status: "ok", taskId: taskId(worker), value: "first" }
+          : { status: "failed", taskId: taskId(worker), error: "original worker failure" },
+      );
+      const result = await first;
+      if (outcome === "ok") {
+        expect(result).toBe(callbackFailure);
+      } else {
+        expect(result).toMatchObject({ message: "original worker failure", code: "failed" });
+        expect(result).not.toBe(callbackFailure);
+      }
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+      const next = pool.run("next", {});
+      const posted = expectDefined(worker.postMessage.mock.calls.at(-1)?.[0], "successor request");
+      worker.emit("message", { status: "ok", taskId: posted.taskId, value: "next" });
+      expect(await next).toBe("next");
+      expect(workers).toHaveLength(1);
+      expect(worker.terminate).not.toHaveBeenCalled();
     },
   );
 });

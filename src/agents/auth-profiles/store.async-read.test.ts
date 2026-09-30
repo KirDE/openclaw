@@ -12,6 +12,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   clearRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
+  setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import * as sqliteRead from "./sqlite-read.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
@@ -25,6 +26,8 @@ const reader = vi.hoisted(() => ({
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  reader.assertCurrent.mockReset();
+  reader.read.mockReset();
   vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockReturnValue(reader);
 });
 
@@ -34,6 +37,20 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+function readableRows(
+  store: AuthProfileStore = { version: 1, profiles: {} },
+  state: AuthProfileRowRead["state"] = { status: "missing", reason: "row" },
+): AuthProfileRowRead {
+  return { store: { status: "readable", raw: store }, state, cacheable: true };
+}
+
+function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) => store) {
+  return createAuthProfileStoreRuntime({
+    listRuntimeExternalAuthProfiles: () => [],
+    overlayExternalAuthProfiles,
+  });
+}
 
 it("keeps cached credentials and selection state separate from mutable runtime views", async () => {
   const root = tempDirs.make("openclaw-auth-cached-mutation-");
@@ -73,12 +90,7 @@ it("keeps cached credentials and selection state separate from mutable runtime v
     lastGood: { custom: "custom:key" },
     usageStats: { "custom:key": { errorCount: 1, failureCounts: { auth: 1 } } },
   };
-  reader.assertCurrent.mockReset();
-  reader.read.mockReset().mockResolvedValue({
-    store: { status: "readable", raw: persisted },
-    state: { status: "readable", raw: state },
-    cacheable: true,
-  });
+  reader.read.mockResolvedValue(readableRows(persisted, { status: "readable", raw: state }));
   const overlay = vi.fn((store: AuthProfileStore) => {
     expect(store.profiles).toEqual(persisted.profiles);
     const key = store.profiles["custom:key"];
@@ -94,10 +106,7 @@ it("keeps cached credentials and selection state separate from mutable runtime v
     oauth.setup!.modelRef = "custom/overlay";
     return store;
   });
-  const runtime = createAuthProfileStoreRuntime({
-    listRuntimeExternalAuthProfiles: () => [],
-    overlayExternalAuthProfiles: overlay,
-  });
+  const runtime = createRuntime(overlay);
   for (let i = 0; i < 2; i++) {
     const store = await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
       inheritedAuthDir: localDir,
@@ -120,17 +129,9 @@ function prepareCachedRuntimeRead() {
   const agentDir = path.join(root, "agents/worker/agent");
   fs.mkdirSync(agentDir, { recursive: true });
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  reader.assertCurrent.mockReset();
-  const rows: AuthProfileRowRead = {
-    store: { status: "readable", raw: { version: 1, profiles: {} } },
-    state: { status: "missing", reason: "row" },
-    cacheable: true,
-  };
-  reader.read.mockReset().mockResolvedValue(rows);
-  const runtime = createAuthProfileStoreRuntime({
-    listRuntimeExternalAuthProfiles: () => [],
-    overlayExternalAuthProfiles: (store) => store,
-  });
+  const rows = readableRows();
+  reader.read.mockResolvedValue(rows);
+  const runtime = createRuntime();
   const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   return {
     agentDir,
@@ -168,17 +169,12 @@ it.each(["", "-wal", "-journal"])(
     expect(reader.read).toHaveBeenCalledTimes(1);
 
     fs.writeFileSync(databasePath + suffix, "synthetic external write");
-    reader.read.mockResolvedValue({
-      store: {
-        status: "readable",
-        raw: {
-          version: 1,
-          profiles: { "custom:new": { type: "api_key", provider: "custom", key: "fixture-new" } },
-        },
-      },
-      state: { status: "missing", reason: "row" },
-      cacheable: true,
-    });
+    reader.read.mockResolvedValue(
+      readableRows({
+        version: 1,
+        profiles: { "custom:new": { type: "api_key", provider: "custom", key: "fixture-new" } },
+      }),
+    );
     clock.mockReturnValue(199);
     await expect(load()).resolves.toMatchObject({ profiles: {} });
     clock.mockReturnValue(200);
@@ -226,54 +222,48 @@ it("does not extend the probe interval by time spent awaiting a cold read", asyn
   expect(reader.read).toHaveBeenCalledTimes(2);
 });
 
-it.each(["rotation", "all-clear", "owner-clear"] as const)(
-  "rejects cached rows after %s during inherited preparation",
-  async (change) => {
-    const root = tempDirs.make("openclaw-auth-cached-rotation-");
-    const localDir = path.join(root, "agents/worker/agent");
-    const inheritedDir = path.join(root, "agents/main/agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    reader.assertCurrent.mockReset();
-    reader.read.mockReset().mockResolvedValue({
-      store: { status: "readable", raw: { version: 1, profiles: {} } },
-      state: { status: "missing", reason: "row" },
-      cacheable: true,
-    });
-    const runtime = createAuthProfileStoreRuntime({
-      listRuntimeExternalAuthProfiles: () => [],
-      overlayExternalAuthProfiles: (store) => store,
-    });
-    await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-      inheritedAuthDir: localDir,
+it.each([
+  "rotation",
+  "all-clear",
+  "owner-clear",
+  "all-clear-and-publish",
+  "owner-clear-and-publish",
+] as const)("rejects cached rows after %s during inherited preparation", async (change) => {
+  const root = tempDirs.make("openclaw-auth-cached-rotation-");
+  const localDir = path.join(root, "agents/worker/agent");
+  const inheritedDir = path.join(root, "agents/main/agent");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  reader.read.mockResolvedValue(readableRows());
+  const runtime = createRuntime();
+  await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
+    inheritedAuthDir: localDir,
+    externalCli: { mode: "none" },
+  });
+  reader.read.mockImplementationOnce(async () => {
+    if (change === "all-clear" || change === "all-clear-and-publish") {
+      clearRuntimeAuthProfileStoreSnapshots();
+    } else if (change === "owner-clear" || change === "owner-clear-and-publish") {
+      clearRuntimeAuthProfileStoreSnapshotCore(localDir);
+    } else {
+      noteRuntimeAuthProfileStorePersistedMutation(localDir, {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: ["custom:local"],
+      });
+    }
+    if (change.endsWith("-and-publish")) {
+      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, localDir);
+    }
+    return readableRows();
+  });
+  await expect(
+    runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
+      inheritedAuthDir: inheritedDir,
       externalCli: { mode: "none" },
-    });
-    reader.read.mockImplementationOnce(async () => {
-      if (change === "all-clear") {
-        clearRuntimeAuthProfileStoreSnapshots();
-      } else if (change === "owner-clear") {
-        clearRuntimeAuthProfileStoreSnapshotCore(localDir);
-      } else {
-        noteRuntimeAuthProfileStorePersistedMutation(localDir, {
-          credentialsChanged: true,
-          stateChanged: false,
-          profileIds: ["custom:local"],
-        });
-      }
-      return {
-        store: { status: "readable", raw: { version: 1, profiles: {} } },
-        state: { status: "missing", reason: "row" },
-        cacheable: true,
-      };
-    });
-    await expect(
-      runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-        inheritedAuthDir: inheritedDir,
-        externalCli: { mode: "none" },
-      }),
-    ).rejects.toThrow("Auth profile store changed during its runtime read");
-    expect(reader.read).toHaveBeenCalledTimes(2);
-  },
-);
+    }),
+  ).rejects.toThrow("Auth profile store changed during its runtime read");
+  expect(reader.read).toHaveBeenCalledTimes(2);
+});
 
 it.each([false, true])(
   "rechecks retired files after an inherited read with populated local SQLite: %s",
@@ -291,34 +281,18 @@ it.each([false, true])(
     };
     const inheritedReadStarted = createDeferredCore();
     const inheritedRows = createDeferredCore<AuthProfileRowRead>();
-    reader.assertCurrent.mockReset();
-    reader.read.mockReset();
-    reader.read.mockResolvedValueOnce({
-      store: { status: "readable", raw: local },
-      state: { status: "missing", reason: "row" },
-      cacheable: true,
-    });
+    reader.read.mockResolvedValueOnce(readableRows(local));
     reader.read.mockImplementationOnce(() => {
       inheritedReadStarted.resolve();
       return inheritedRows.promise;
     });
-    const runtime = createAuthProfileStoreRuntime({
-      listRuntimeExternalAuthProfiles: () => [],
-      overlayExternalAuthProfiles: (store) => store,
-    });
-    const inherited: AuthProfileRowRead = {
-      store: {
-        status: "readable",
-        raw: {
-          version: 1,
-          profiles: {
-            "custom:inherited": { type: "api_key", provider: "custom", key: "fixture-inherited" },
-          },
-        },
+    const runtime = createRuntime();
+    const inherited = readableRows({
+      version: 1,
+      profiles: {
+        "custom:inherited": { type: "api_key", provider: "custom", key: "fixture-inherited" },
       },
-      state: { status: "missing", reason: "row" },
-      cacheable: true,
-    };
+    });
     const loading = runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
       inheritedAuthDir: inheritedDir,
       externalCli: { mode: "none" },
@@ -358,11 +332,7 @@ it("rejects a revoked read before publishing host migration facts", async () => 
   let active = true;
   reader.read.mockImplementation(async () => {
     active = false;
-    return {
-      store: { status: "readable", raw: { version: 1, profiles: {} } },
-      state: { status: "missing", reason: "row" },
-      cacheable: true,
-    };
+    return readableRows();
   });
   reader.assertCurrent.mockImplementation(() => {
     if (!active) {
@@ -373,10 +343,7 @@ it("rejects a revoked read before publishing host migration facts", async () => 
     .spyOn(migration, "assertAuthProfileMigrationCandidates")
     .mockImplementation(() => {});
   const overlayExternalAuthProfiles = vi.fn((store: AuthProfileStore) => store);
-  const runtime = createAuthProfileStoreRuntime({
-    listRuntimeExternalAuthProfiles: () => [],
-    overlayExternalAuthProfiles,
-  });
+  const runtime = createRuntime(overlayExternalAuthProfiles);
 
   await expect(
     runtime.loadAuthProfileStoreForRuntimeAsync("/fixture/agent", {
@@ -402,8 +369,6 @@ it.each(["matching inherited", "unrelated inherited", "selected"] as const)(
       version: 1,
       profiles: { "custom:local": { type: "api_key", provider: "custom", key: "fixture" } },
     };
-    reader.assertCurrent.mockReset();
-    reader.read.mockReset();
     reader.read.mockResolvedValueOnce(
       refusedOwner === "selected"
         ? {
@@ -411,11 +376,7 @@ it.each(["matching inherited", "unrelated inherited", "selected"] as const)(
             state: { status: "missing", reason: "row" },
             cacheable: false,
           }
-        : {
-            store: { status: "readable", raw: local },
-            state: { status: "missing", reason: "row" },
-            cacheable: true,
-          },
+        : readableRows(local),
     );
     reader.read.mockResolvedValue({
       store: { status: "unreadable" },
@@ -438,10 +399,7 @@ it.each(["matching inherited", "unrelated inherited", "selected"] as const)(
       ],
       { env, source: "startup" },
     );
-    const runtime = createAuthProfileStoreRuntime({
-      listRuntimeExternalAuthProfiles: () => [],
-      overlayExternalAuthProfiles: (store) => store,
-    });
+    const runtime = createRuntime();
     try {
       const result = runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
         inheritedAuthDir: inheritedDir,

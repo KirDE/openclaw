@@ -4,20 +4,19 @@ import { property, state } from "lit/decorators.js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
+import { postNativeExternalLink } from "../../../app/native-link-routing.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
 import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  loadBrowserPagePreview,
-  loadBrowserTabThumbnail,
-} from "../../../lib/chat/browser-tab-preview.ts";
+import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { loadLinkPreview } from "../../../lib/link-preview.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import sessionMenuStyles from "../../../styles/session-menu.css?inline";
@@ -33,20 +32,20 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   @state() private thumbnailSrc?: string;
   @state() private pagePreview?: ControlUiLinkPreview;
   private requestIdentity?: { client: unknown; key: string };
-  private pageIdentity?: { client: unknown; url: string };
+  private pageIdentity?: {
+    client: unknown;
+    url: string;
+    generation: number;
+    recoveryScope: string;
+  };
   private readonly failedImages = new Set<string>();
 
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    );
+    this.subscriptions.watchStore(() => this.context?.gateway);
+    this.subscriptions.watchStore(() => this.context?.config);
+    this.subscriptions.watchStore(() => this.context?.theme);
   }
 
   static override styles = [
@@ -173,6 +172,10 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         width: 16px;
         height: 16px;
       }
+      .shot[data-new-tab-action],
+      .actions button[data-new-tab-action] {
+        cursor: pointer;
+      }
     `,
   ];
 
@@ -198,26 +201,39 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.pagePreview = undefined;
       return;
     }
-    if (this.pageIdentity?.client === client && this.pageIdentity.url === url) {
+    if (this.pagePreviewCurrent) {
       return;
     }
-    const identity = { client, url };
+    const identity = {
+      client,
+      url,
+      generation: client.connectionGeneration,
+      recoveryScope: client.recoveryScope,
+    };
     this.pageIdentity = identity;
     this.pagePreview = undefined;
     this.failedImages.clear();
-    void loadBrowserPagePreview(client, url).then((preview) => {
+    void loadLinkPreview(client, url).then((preview) => {
       // Recycled transcript cards and connection/config changes retire the old
       // request; its result must never become another page's preview.
-      if (
-        this.isConnected &&
-        this.pageIdentity === identity &&
-        this.canLoadPagePreview &&
-        this.preview?.url === url &&
-        this.context?.gateway.snapshot.client === client
-      ) {
+      if (this.isConnected && this.pageIdentity === identity && this.pagePreviewCurrent) {
         this.pagePreview = preview;
       }
     });
+  }
+
+  private get pagePreviewCurrent(): boolean {
+    const identity = this.pageIdentity;
+    const client = this.context?.gateway.snapshot.client;
+    return Boolean(
+      identity &&
+      client &&
+      this.canLoadPagePreview &&
+      identity.client === client &&
+      identity.url === this.preview?.url &&
+      identity.generation === client.connectionGeneration &&
+      identity.recoveryScope === client.recoveryScope,
+    );
   }
 
   override disconnectedCallback() {
@@ -274,6 +290,25 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     });
   }
 
+  private get opensExternally() {
+    return this.context?.theme.settings.openLinksExternally === true;
+  }
+
+  private readonly open = () => {
+    if (this.opensExternally) {
+      this.openExternal();
+    } else {
+      this.openPanel();
+    }
+  };
+
+  private openExternal() {
+    const url = resolveSafeExternalUrl(this.preview?.url ?? "", window.location.href);
+    if (url && !postNativeExternalLink(url)) {
+      openExternalUrlSafe(url);
+    }
+  }
+
   private readonly openPanel = () => {
     const browserTab = readBrowserTabTarget(this.preview);
     if (!browserTab) {
@@ -296,7 +331,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     if (event.detail.item.value === "copy-url") {
       void copyToClipboard(url, () => this.isConnected && this.preview?.url === url);
     } else if (event.detail.item.value === "open-new-tab") {
-      openExternalUrlSafe(url);
+      this.openExternal();
+    } else if (event.detail.item.value === "open-within-openclaw") {
+      this.openPanel();
     }
   };
 
@@ -310,12 +347,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
         ? this.thumbnailSrc
         : undefined;
-    const page =
-      this.canLoadPagePreview &&
-      this.pageIdentity?.client === this.context?.gateway.snapshot.client &&
-      this.pageIdentity?.url === preview.url
-        ? this.pagePreview
-        : undefined;
+    const page = this.pagePreviewCurrent ? this.pagePreview : undefined;
     const favicon = page?.faviconDataUrl;
     const image =
       currentImage && !this.failedImages.has(currentImage) ? currentImage : page?.imageDataUrl;
@@ -336,8 +368,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                   type="button"
                   class=${image === currentImage ? "shot" : "shot social"}
                   aria-label=${label}
-                  title=${t("browser.openPanel")}
-                  @click=${this.openPanel}
+                  title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+                  ?data-new-tab-action=${this.opensExternally}
+                  @click=${this.open}
                 >
                   <img
                     src=${image}
@@ -371,7 +404,12 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
             ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
           </span>
           <span class="actions">
-            <button type="button" title=${t("browser.openPanel")} @click=${this.openPanel}>
+            <button
+              type="button"
+              title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+              ?data-new-tab-action=${this.opensExternally}
+              @click=${this.open}
+            >
               ${t("browser.open")}
             </button>
             <wa-dropdown
@@ -393,11 +431,15 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
                 ${t("browser.copyUrl")}
               </wa-dropdown-item>
-              <wa-dropdown-item class="session-menu__item" value="open-new-tab" data-new-tab-action>
+              <wa-dropdown-item
+                class="session-menu__item"
+                value=${this.opensExternally ? "open-within-openclaw" : "open-new-tab"}
+                ?data-new-tab-action=${!this.opensExternally}
+              >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.externalLink}</span
+                  >${this.opensExternally ? icons.globe : icons.externalLink}</span
                 >
-                ${t("browser.openNewTab")}
+                ${this.opensExternally ? t("browser.openWithinOpenClaw") : t("browser.openNewTab")}
               </wa-dropdown-item>
             </wa-dropdown>
           </span>

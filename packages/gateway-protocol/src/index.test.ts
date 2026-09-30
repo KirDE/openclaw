@@ -168,8 +168,20 @@ describe("lazy protocol validators", () => {
       { boardFace: "dashboard" },
       { hasBoard: true },
       { hasBoard: false },
+      { activityPulseBoundaries: [1, 2] },
     ]);
     expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
+    expectRejected(validateSessionsListParams, [
+      { activityPulseBoundaries: [1, 1] },
+      { activityPulseBoundaries: [0, 2, 1] },
+    ]);
+    expect(formatValidationErrors(validateSessionsListParams.errors)).toContain(
+      "activityPulseBoundaries: must be strictly ascending",
+    );
+    // Hostile elements must reach the schema's type error instead of throwing during comparison.
+    expectRejected(validateSessionsListParams, [
+      { activityPulseBoundaries: [0, { toString: 1 }, 2] },
+    ]);
     expectRejected(validateSessionsListParams, [{ sortBy: "recent" }]);
     expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
   });
@@ -220,6 +232,7 @@ describe("lazy protocol validators", () => {
     } as const;
     expectAccepted(validateSessionsPatchManyParams, [
       { targets: [target], patch: fullPatch },
+      { targets: [target], patch: { fastMode: "ultrafast" } },
       {
         targets: Array.from({ length: 100 }, (_, index) => ({
           key: `agent:main:patch-${index}`,
@@ -424,9 +437,12 @@ describe("lazy protocol validators", () => {
     });
     expectAccepted(validateSessionsCompanionAskParams, [
       companion({ question: "What changed in the project?" }),
+      companion({ question: "Why?", selectionContext: "x".repeat(16_000) }),
     ]);
     expectRejected(validateSessionsCompanionAskParams, [
       companion({ question: "x".repeat(401) }),
+      companion({ question: "Why?", selectionContext: "" }),
+      companion({ question: "Why?", selectionContext: "x".repeat(16_001) }),
       { sessionKey: "", question: "why" },
       companion({ question: "why", extra: true }),
     ]);
@@ -911,6 +927,7 @@ describe("validateChatSendParams", () => {
 
     expectAccepted(validateChatSendParams, [
       base,
+      { ...base, fastMode: "ultrafast" },
       {
         ...base,
         expectedSessionRoutingContract: "per-sender|main|main",
@@ -1035,6 +1052,8 @@ describe("validateNodePresenceActivityPayload", () => {
   it("accepts bounded input idle time", () => {
     expectAccepted(validateNodePresenceActivityPayload, [
       { idleSeconds: 12 },
+      { idleSeconds: 12, source: "app" },
+      { idleSeconds: 12, source: "system" },
       { idleSeconds: 2_592_000, saturated: true },
       { action: "clear" },
     ]);
@@ -1042,6 +1061,7 @@ describe("validateNodePresenceActivityPayload", () => {
 
   it("rejects negative, unbounded, and extra fields", () => {
     expectRejected(validateNodePresenceActivityPayload, [
+      { idleSeconds: 12, source: "browser" },
       { idleSeconds: -1 },
       { idleSeconds: 2_592_001 },
       { idleSeconds: 1, active: true },
