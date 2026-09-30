@@ -1,39 +1,44 @@
 import { describe, expect, it } from "vitest";
 import { isDetachedCronSessionTarget } from "../session-target.js";
-import {
-  resolveCronExecCompletionSession,
-  resolveCronExecCompletionSessionKey,
-} from "./completion-session-key.js";
+import { resolveCronExecCompletionSession } from "./completion-session-key.js";
 
-describe("resolveCronExecCompletionSessionKey", () => {
+describe("resolveCronExecCompletionSession", () => {
   it("does not isolate normal main-session completions", () => {
     expect(
-      resolveCronExecCompletionSessionKey({
+      resolveCronExecCompletionSession({
         usesDetachedRunSession: isDetachedCronSessionTarget("main"),
         runSessionKey: "agent:main:main",
         completionSessionKey: "agent:main:telegram:group:-1001:topic:47",
+        sessionStore: {},
       }),
-    ).toBeUndefined();
+    ).toEqual({});
   });
 
   it("does not isolate when the completion and run sessions are identical", () => {
     expect(
-      resolveCronExecCompletionSessionKey({
+      resolveCronExecCompletionSession({
         usesDetachedRunSession: true,
         runSessionKey: "agent:main:main",
         completionSessionKey: "agent:main:main",
+        sessionStore: {},
       }),
-    ).toBeUndefined();
+    ).toEqual({});
   });
 
   it("isolates a detached completion owned by a distinct source session", () => {
     expect(
-      resolveCronExecCompletionSessionKey({
+      resolveCronExecCompletionSession({
         usesDetachedRunSession: true,
         runSessionKey: "agent:main:cron:topic-cron:run:test-run-id",
         completionSessionKey: "agent:main:telegram:group:-1001:topic:47",
+        sessionStore: {
+          "agent:main:telegram:group:-1001:topic:47": { sessionId: "source-session" },
+        },
       }),
-    ).toBe("agent:main:telegram:group:-1001:topic:47");
+    ).toEqual({
+      sessionKey: "agent:main:telegram:group:-1001:topic:47",
+      generation: { sessionId: "source-session", lifecycleRevision: undefined },
+    });
   });
 
   it("captures only an existing saved completion session generation", () => {

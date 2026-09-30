@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCronChannelOutputPolicy,
-  resolveCurrentChannelTarget,
+  resolveCurrentChannelContext,
 } from "./channel-output-policy.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -70,29 +70,29 @@ describe("cron channel output policy", () => {
 
   it("lets channel plugins format current tool context targets", async () => {
     await expect(
-      resolveCurrentChannelTarget({
+      resolveCurrentChannelContext({
         channel: "topicchat",
         to: "room",
         threadId: 42,
       }),
-    ).resolves.toBe("room#42");
+    ).resolves.toMatchObject({ currentChannelId: "room#42", currentThreadTs: "42" });
     await expect(
-      resolveCurrentChannelTarget({
+      resolveCurrentChannelContext({
         channel: "plainchat",
         to: "room",
         threadId: 42,
       }),
-    ).resolves.toBe("room");
+    ).resolves.toMatchObject({ currentChannelId: "room", currentThreadTs: "42" });
   });
 
   it("keeps an unthreaded target without consulting the channel plugin", async () => {
     channelPluginMocks.getChannelPlugin.mockClear();
     await expect(
-      resolveCurrentChannelTarget({ channel: "topicchat", to: "room", threadId: null }),
-    ).resolves.toBe("room");
-    await expect(resolveCurrentChannelTarget({ channel: "topicchat", to: "room" })).resolves.toBe(
-      "room",
-    );
+      resolveCurrentChannelContext({ channel: "topicchat", to: "room", threadId: null }),
+    ).resolves.toHaveProperty("currentChannelId", "room");
+    await expect(
+      resolveCurrentChannelContext({ channel: "topicchat", to: "room" }),
+    ).resolves.toHaveProperty("currentChannelId", "room");
     expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
   });
 });

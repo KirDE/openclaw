@@ -30,7 +30,7 @@ export async function resolveCronChannelOutputPolicy(
 }
 
 /** Resolves the provider-specific current-thread target for a delivery address. */
-export async function resolveCurrentChannelTarget(params: {
+async function resolveCurrentChannelTarget(params: {
   channel?: string;
   to?: string;
   threadId?: string | number | null;

@@ -1,5 +1,5 @@
 /** Selects a distinct source session only for cron runs that execute detached. */
-export function resolveCronExecCompletionSessionKey(params: {
+function resolveCronExecCompletionSessionKey(params: {
   usesDetachedRunSession: boolean;
   runSessionKey: string;
   completionSessionKey?: string;

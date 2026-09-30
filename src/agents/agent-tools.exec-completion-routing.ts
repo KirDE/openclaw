@@ -4,17 +4,9 @@ import {
   resolveEventSessionRoutingPolicy,
 } from "../infra/event-session-routing.js";
 
-export type ExecCompletionSessionGeneration = {
+type ExecCompletionSessionGeneration = {
   sessionId: string;
   lifecycleRevision?: string;
-};
-
-export type AgentRunIdentityOptions = {
-  sessionId?: string;
-  runId?: string;
-  trigger?: string;
-  jobId?: string;
-  memoryFlushWritePath?: string;
 };
 
 export type ExecCompletionRoutingOptions = {
