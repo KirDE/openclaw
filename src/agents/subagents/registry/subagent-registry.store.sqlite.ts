@@ -2,11 +2,10 @@
  * Persists subagent run records in the shared sqlite state database, with
  * query-bearing identity columns indexing canonical normalized payload JSON.
  */
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql, type ExpressionBuilder, type Selectable } from "kysely";
+import { sql, type ExpressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -19,12 +18,18 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
+import type {
+  SubagentRunReadRecord,
+  SubagentMaintenanceDurableBasis,
+  SubagentRunsDurableBasis,
+} from "./subagent-registry-read.types.js";
 import {
-  normalizeSubagentRunState,
-  projectSubagentRunForMaintenance,
-} from "./subagent-delivery-state.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+  bindSubagentRunRecord,
+  DELIVERY_STATUSES,
+  rowToSubagentRunRecord,
+  type SubagentRunSqliteRow,
+} from "./subagent-registry.store.codec.js";
 import {
   hasParentStoreColumns,
   writeSubagentRunValuesInDatabase,
@@ -33,9 +38,7 @@ import {
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
   | "run_id"
@@ -47,9 +50,11 @@ type SubagentRunReadSqliteRow = Pick<
   | "created_at"
 > & {
   model: string | null;
+  task_run_id: string | null;
   swarm_run_id: string | null;
   run_timeout_seconds: number | null;
   execution_status: SubagentRunRecord["execution"]["status"];
+  interruption_reason: string | null;
   started_at: number | null;
   session_started_at: number | null;
   accumulated_runtime_ms: number | null;
@@ -59,6 +64,7 @@ type SubagentRunReadSqliteRow = Pick<
   generation: number | null;
   outcome_status: string | null;
   delivery_status: string | null;
+  delivery_disposition: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
   collect: number | null;
@@ -66,12 +72,6 @@ type SubagentRunReadSqliteRow = Pick<
   swarm_requester_session_key: string | null;
   collector_status: NonNullable<SubagentRunRecord["collectorCompletion"]>["status"] | null;
 };
-type CanonicalSubagentRunRecord = SubagentRunRecord &
-  Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
-const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-const DELIVERY_STATUSES = new Set(
-  "not_required pending in_progress delivered failed suspended discarded".split(" "),
-);
 function parentStoreColumns(db: DatabaseSync) {
   return hasParentStoreColumns(db)
     ? (["requester_store_path", "controller_store_path"] as const)
@@ -81,101 +81,24 @@ function parentStoreColumns(db: DatabaseSync) {
       ];
 }
 
-function hasStateStatus(
-  value: unknown,
-  statuses: ReadonlySet<string>,
-): value is Record<string, unknown> {
-  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
-}
-
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
-  return (
-    isRecord(value) &&
-    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
-    isRecord(value.completion) &&
-    typeof value.completion.required === "boolean" &&
-    hasStateStatus(value.delivery, DELIVERY_STATUSES) &&
-    !(
-      "handoffLeaseId" in value.delivery ||
-      "handoffLeasedAt" in value.delivery ||
-      "handoffInjectedAt" in value.delivery
-    )
-  );
-}
-
-function parseJson(raw: string | null): unknown {
-  return raw ? safeParseJson(raw) : undefined;
-}
-
-/** Rehydrates one sqlite row into the normalized subagent run record shape. */
-function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const stored = parseJson(row.payload_json);
-  const payload =
-    isRecord(stored) &&
-    isRecord(stored.parentCompletion) &&
-    stored.parentCompletion.completionTarget === "parent"
-      ? stored.parentCompletion
-      : stored;
-  if (!isCanonicalSubagentRunRecord(payload)) {
-    return null;
-  }
-  // This module owns every production write and commits indexed columns with
-  // this complete payload atomically; rehydrating both created competing state.
-  payload.runId = row.run_id;
-  payload.childSessionKey = row.child_session_key;
-  payload.requesterSessionKey = row.requester_session_key;
-  payload.requesterStorePath = row.requester_store_path ?? undefined;
-  payload.controllerStorePath = row.controller_store_path ?? undefined;
-  const controllerSessionKey = row.controller_session_key?.trim();
-  if (controllerSessionKey) {
-    payload.controllerSessionKey = controllerSessionKey;
-  } else {
-    delete payload.controllerSessionKey;
-  }
-  if (payload.requesterOrigin) {
-    payload.requesterOrigin = normalizeDeliveryContext(payload.requesterOrigin);
-  }
-  if (payload.expectsCompletionMessage === false) {
-    payload.delivery.status = "not_required";
-  }
-  const record = normalizeSubagentRunState(payload);
-  return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
-}
-
-/** Canonically serializes a run before an outer transaction acquires the write lock. */
-export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
-  const normalized = normalizeSubagentRunState(structuredClone(entry));
-  if (!isCanonicalSubagentRunRecord(normalized)) {
-    throw new Error("subagent run is missing canonical nested state");
-  }
-  return {
-    run_id: normalized.runId,
-    child_session_key: normalized.childSessionKey,
-    controller_session_key: normalized.controllerSessionKey?.trim() || null,
-    requester_session_key: normalized.requesterSessionKey,
-    requester_store_path: normalized.requesterStorePath ?? null,
-    controller_store_path: normalized.controllerStorePath ?? null,
-    created_at: normalized.createdAt,
-    // Released readers require root execution/completion/delivery state. Hiding
-    // the whole private record also excludes it from legacy mixed/nested summaries.
-    // Downgrades may discard these rows, but cannot reinterpret them as public.
-    payload_json: JSON.stringify(
-      normalized.completionTarget === "parent" ? { parentCompletion: normalized } : normalized,
-    ),
-  };
-}
-
-export function readSubagentRun(
-  database: OpenClawStateDatabase,
+export function readSubagentRunRow(
+  database: Pick<OpenClawStateDatabase, "db">,
   runId: string,
-): SubagentRunRecord | null {
-  const row = executeSqliteQuerySync(
+): SubagentRunSqliteRow | undefined {
+  return executeSqliteQuerySync(
     database.db,
     getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
       .selectFrom("subagent_runs")
       .selectAll()
       .where("run_id", "=", runId),
   ).rows[0];
+}
+
+export function readSubagentRun(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const row = readSubagentRunRow(database, runId);
   return row ? rowToSubagentRunRecord(row) : null;
 }
 
@@ -212,7 +135,7 @@ function subagentControllerFilter(controllerSessionKeys: readonly string[]) {
 
 function readSubagentRegistryRows(
   scope?: SubagentRegistryReadScope,
-  database = openOpenClawStateDatabase(),
+  database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
   projection: "full" | "maintenance" = "full",
 ): SubagentRunSqliteRow[] {
   const { db } = database;
@@ -307,7 +230,7 @@ const subagentMaintenancePayload =
     ELSE payload_json END`;
 
 function readSubagentSessionListRows(
-  scope?: { controllerSessionKeys?: readonly string[]; runIds?: readonly string[] },
+  scope?: { controllerSessionKeys?: readonly string[] },
   database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
 ): SubagentRunReadSqliteRow[] {
   const { db } = database;
@@ -328,9 +251,6 @@ function readSubagentSessionListRows(
             // Materialize compact metadata once; an inline CTE repeats retained JSON work per field.
             subagentMetadataPayload.as("payload_json"),
           ]);
-          if (scope?.runIds) {
-            return selected.where("run_id", "in", sqliteStringSet(scope.runIds));
-          }
           return scope?.controllerSessionKeys
             ? selected.where(subagentControllerFilter(scope.controllerSessionKeys))
             : selected;
@@ -346,6 +266,7 @@ function readSubagentSessionListRows(
         "controller_store_path",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
+        subagentPayloadJsonValue<string | null>("$.taskRunId").as("task_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
         subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
         subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
@@ -359,6 +280,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
           "execution_status",
         ),
+        subagentPayloadJsonValue<string | null>("$.execution.interruptionReason").as(
+          "interruption_reason",
+        ),
         subagentPayloadJsonValue<number | null>("$.execution.startedAt").as("started_at"),
         subagentPayloadJsonValue<number | null>("$.sessionStartedAt").as("session_started_at"),
         subagentPayloadJsonValue<number | null>("$.accumulatedRuntimeMs").as(
@@ -370,6 +294,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
+        subagentPayloadJsonValue<string | null>("$.delivery.disposition").as(
+          "delivery_disposition",
+        ),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
@@ -405,6 +332,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
   return Object.fromEntries(
     Object.entries({
       runId,
+      taskRunId: row.task_run_id ?? undefined,
       swarmRunId: row.swarm_run_id || undefined,
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
@@ -421,6 +349,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       createdAt: row.created_at,
       execution: {
         status: row.execution_status,
+        ...(row.interruption_reason === "gateway-restart"
+          ? { interruptionReason: "gateway-restart" as const }
+          : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(endedAt !== undefined ? { endedAt } : {}),
         ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
@@ -433,6 +364,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       delivery: deliveryStatus
         ? {
             status: deliveryStatus,
+            ...(row.delivery_disposition === "intentional_non_delivery"
+              ? { disposition: "intentional_non_delivery" as const }
+              : {}),
             ...(normalizeFiniteNumber(row.delivery_suspended_at) !== undefined
               ? { suspendedAt: row.delivery_suspended_at ?? undefined }
               : {}),
@@ -444,7 +378,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
 
 function loadScopedSubagentRuns(
   scope: SubagentRegistryReadScope,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   const normalizedScope =
     scope.kind === "runs" ? scope : { ...scope, sessionKey: scope.sessionKey.trim() };
@@ -469,29 +403,37 @@ export function loadSubagentRunsForControllerFromSqlite(
 }
 
 /** Loads all generations readable by one requester or controller session. */
-export function loadSubagentRunsForSessionFromSqlite(sessionKey: string): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "session", sessionKey });
+export function loadSubagentRunsForSessionFromSqlite(
+  sessionKey: string,
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "session", sessionKey }, database);
 }
 
 /** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }
 
 /** Hydrates exact physical rows selected by the shared registry read projection. */
-export function loadSubagentRunsByRunIdsFromSqlite(runIds: readonly string[]): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "runs", runIds });
+export function loadSubagentRunsByRunIdsFromSqlite(
+  runIds: readonly string[],
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "runs", runIds }, database);
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */
-export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
+export function loadSubagentRegistryFromSqlite(
+  database?: Pick<OpenClawStateDatabase, "db">,
+): Map<string, SubagentRunRecord> {
   // Retired file-era runs are intentionally not recovered here: after SQLite
   // pruning, the file cannot prove whether a run is live or stale. Doctor owns discard.
   const runs = new Map<string, SubagentRunRecord>();
-  for (const row of readSubagentRegistryRows()) {
+  for (const row of readSubagentRegistryRows(undefined, database)) {
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, entry);
@@ -500,16 +442,49 @@ export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord>
   return runs;
 }
 
-/** Uses the canonical codec without transferring retained prompts and completion results. */
-export function loadSubagentMaintenanceRunsFromSqlite(): Map<string, SubagentRunMaintenanceRecord> {
+function decodeSubagentMaintenanceRows(
+  rows: Iterable<SubagentRunSqliteRow>,
+  observe?: (row: SubagentRunSqliteRow) => void,
+): Map<string, SubagentRunMaintenanceRecord> {
   const runs = new Map<string, SubagentRunMaintenanceRecord>();
-  for (const row of readSubagentRegistryRows(undefined, undefined, "maintenance")) {
+  for (const row of rows) {
+    observe?.(row);
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, projectSubagentRunForMaintenance(entry));
     }
   }
   return runs;
+}
+
+/** Uses the canonical codec without transferring retained prompts and completion results. */
+export function loadSubagentMaintenanceRunsFromSqlite(): Map<string, SubagentRunMaintenanceRecord> {
+  return decodeSubagentMaintenanceRows(
+    readSubagentRegistryRows(undefined, undefined, "maintenance"),
+  );
+}
+
+/** Hash physical projection rows before decoding, including malformed and colliding identities. */
+export function loadSubagentMaintenanceRunsInDatabase(
+  database: Pick<OpenClawStateDatabase, "db">,
+): { runs: Map<string, SubagentRunMaintenanceRecord>; digest: string } {
+  return runSqliteDeferredTransactionSync(database.db, () => {
+    const hash = createHash("sha256");
+    const runs = decodeSubagentMaintenanceRows(
+      readSubagentRegistryRows(undefined, database, "maintenance"),
+      (row) => {
+        hash.update(JSON.stringify(row));
+      },
+    );
+    return { runs, digest: hash.digest("hex") };
+  });
+}
+
+export function subagentMaintenanceDurableBasisMatches(
+  database: Pick<OpenClawStateDatabase, "db">,
+  basis: SubagentMaintenanceDurableBasis,
+): boolean {
+  return loadSubagentMaintenanceRunsInDatabase(database).digest === basis.digest;
 }
 
 /** Loads only the canonical fields needed to build session-list topology metadata. */
@@ -531,44 +506,32 @@ export function loadSubagentSessionListRunsFromSqlite(
   return runs;
 }
 
-export function loadSubagentRunsForSessionsFromSqlite(
+/** Select identities and physical records in one snapshot, before codec filtering. */
+function loadSubagentRunsForSessions(
+  database: Pick<OpenClawStateDatabase, "db">,
   sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean };
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean };
-/** Select identities and their records from the same persisted read snapshot. */
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-  projection: "full" | "session-list",
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean } {
-  const database = openOpenClawStateDatabase();
+  inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
+  observe?: (kind: "topology" | "row", row: unknown) => void,
+) {
   const { db } = database;
   return runSqliteDeferredTransactionSync(db, () => {
+    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     const identities = executeSqliteQuerySync(
       db,
-      getNodeSqliteKysely<SubagentRegistryDatabase>(db)
+      stateDb
         .selectFrom("subagent_runs")
-        .select(["run_id", "child_session_key", "requester_session_key"]),
+        .select(["run_id", "child_session_key", "requester_session_key"])
+        .orderBy("run_id", "asc"),
     ).rows;
     const selected = collectSubagentSessionReadKeys(
       sessionKeys,
       identities.map((row) => ({
         childSessionKey: row.child_session_key,
-        requesterSessionKey:
-          projection === "session-list"
-            ? row.requester_session_key.trim()
-            : row.requester_session_key,
+        requesterSessionKey: row.requester_session_key,
       })),
       inMemoryRuns,
     );
-    // Include physical rows that decode to the same run ID, even outside the
-    // selected tree, so the codec's ordered replacement cannot resurrect a row.
+    // Preserve duplicate physical identities, including rows outside the selected tree.
     const selectedRunIds = new Set(
       identities
         .filter((row) => selected.has(row.child_session_key.trim()))
@@ -577,31 +540,56 @@ export function loadSubagentRunsForSessionsFromSqlite(
     const runIds = identities
       .filter((row) => selectedRunIds.has(row.run_id.trim()))
       .map((row) => row.run_id);
-    const runs = new Map<string, SubagentRunReadRecord>();
-    // Each projection has its own cache; only complete physical coverage may seed it.
+    const runs = new Map<string, SubagentRunRecord>();
     const complete = runIds.length === identities.length;
-    if (runIds.length) {
-      if (projection === "full") {
-        for (const row of readSubagentRegistryRows(
-          complete ? undefined : { kind: "runs", runIds },
-          database,
-        )) {
-          const entry = rowToSubagentRunRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
-        }
-      } else {
-        for (const row of readSubagentSessionListRows({ runIds }, database)) {
-          const entry = rowToSubagentRunReadRecord(row);
-          if (entry) {
-            runs.set(entry.runId, entry);
-          }
+    // Topology includes malformed payloads and newly attached descendant branches.
+    if (observe) {
+      for (const row of identities) {
+        if (selected.has(row.child_session_key.trim()) || selectedRunIds.has(row.run_id.trim())) {
+          observe("topology", row);
         }
       }
     }
-    return { sessionKeys: selected, runs, complete };
+    if (runIds.length) {
+      const query = stateDb.selectFrom("subagent_runs").selectAll();
+      const rows = executeSqliteQuerySync(
+        db,
+        (complete ? query : query.where("run_id", "in", sqliteStringSet(runIds)))
+          .orderBy("created_at", "asc")
+          .orderBy("run_id", "asc"),
+      ).rows;
+      for (const row of rows) {
+        observe?.("row", row);
+        const entry = rowToSubagentRunRecord(row);
+        if (entry) {
+          runs.set(entry.runId, entry);
+        }
+      }
+    }
+    return { sessionKeys: selected, runIds, runs, complete };
   });
+}
+
+export function loadSubagentRunsForSessionsInDatabase(
+  database: Pick<OpenClawStateDatabase, "db">,
+  sessionKeys: readonly string[],
+  inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
+) {
+  const hash = createHash("sha256");
+  const selected = loadSubagentRunsForSessions(database, sessionKeys, inMemoryRuns, (kind, row) => {
+    hash.update(JSON.stringify([kind, row]));
+  });
+  return { ...selected, digest: hash.digest("hex") };
+}
+
+export function subagentRunsDurableBasisMatches(
+  database: Pick<OpenClawStateDatabase, "db">,
+  basis: SubagentRunsDurableBasis,
+): boolean {
+  return (
+    loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
+      .digest === basis.digest
+  );
 }
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */

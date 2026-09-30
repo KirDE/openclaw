@@ -49,6 +49,11 @@ export function maybeNotifyOnExecExit(
     return;
   }
   session.exitNotified = true;
+  // A requested stop must not wake a later turn just to relay retained output.
+  // Cleanup failure remains reportable even when the stop was requested.
+  if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
+    return;
+  }
   const expectedGeneration = session.eventRouting?.expectedSessionGeneration;
   if (
     !isExecCompletionRouteCurrent({
@@ -63,9 +68,6 @@ export function maybeNotifyOnExecExit(
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
-  }
   if (
     status === "completed" &&
     session.exitCode === 0 &&

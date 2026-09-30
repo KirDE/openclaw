@@ -1,7 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
-import { resolveGroupToolPolicyOutcome } from "../../agents/agent-tools.policy.js";
-import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -18,10 +17,17 @@ import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded
 import { SUPPRESS_EXEC_NOTIFY_OVERRIDES } from "../../agents/exec-defaults.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  resolveScheduledToolPolicyContext,
+} from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { needsThinkHydration } from "../../agents/thinking-runtime.js";
@@ -35,10 +41,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -54,10 +56,7 @@ import {
   prepareCronPromptRunAdmission,
 } from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
-import {
-  appendCronDeliveryInstruction,
-  buildCronDeliveryTargetRuntimeContext,
-} from "./run-delivery-trace.js";
+import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
   LiveSessionModelSwitchError,
@@ -78,7 +77,6 @@ import {
 } from "./run-session-state.js";
 import { resolveThinkingSelection } from "./run.runtime.js";
 import type {
-  AgentTurnPayload,
   CronCompletedPromptRun,
   CronExecutionResult,
   CronRunnerStartedInfo,
@@ -132,15 +130,6 @@ function isCommandStyleCronMessage(message: string): boolean {
   return !message.trim().includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(message.trim());
 }
 
-function resolveCronBootstrapContextMode(
-  payload: AgentTurnPayload,
-): BootstrapContextMode | undefined {
-  // Command-like cron prompts benefit from lightweight bootstrap context so
-  // simple scheduled command tasks do not spend budget on full repo context.
-  const lightweight = payload?.lightContext ?? isCommandStyleCronMessage(payload?.message ?? "");
-  return lightweight ? "lightweight" : undefined;
-}
-
 /** Creates the model-fallback executor for one isolated cron prompt run. */
 function createCronPromptExecutor(
   params: Omit<
@@ -169,15 +158,18 @@ function createCronPromptExecutor(
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
-  const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const validatedScheduledToolPolicy = resolveCronScheduledToolPolicy({
-    toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: params.job.scheduledToolPolicy,
-    owner: params.job.owner,
-  });
+  const bootstrapContextMode =
+    (params.agentPayload?.lightContext ??
+    isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
+      ? "lightweight"
+      : undefined;
   const scheduledToolPolicy = resolveScheduledToolPolicyContext({
     toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: validatedScheduledToolPolicy,
+    scheduledToolPolicy: resolveCronScheduledToolPolicy({
+      toolsAllow: params.agentPayload?.toolsAllow,
+      scheduledToolPolicy: params.job.scheduledToolPolicy,
+      owner: params.job.owner,
+    }),
     callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
     execTarget: params.job.toolsAllowExecTarget,
   });
@@ -185,50 +177,31 @@ function createCronPromptExecutor(
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
-    const policyOutcome = resolveGroupToolPolicyOutcome({
+    const callerContext = resolveScheduledToolCallerContext({ scheduledToolPolicy });
+    resolveGroupToolPolicy({
       config: params.cfgWithAgentDefaults,
       sessionKey: scheduledToolPolicy.ownerSessionKey,
-      messageProvider: messageChannel,
+      messageProvider: callerContext.local ? messageChannel : (callerContext.channel ?? undefined),
       accountId: scheduledToolPolicy.ownerAccountId,
       requireConfiguredAccount: true,
       senderPolicyMode: "never",
     });
-    if (policyOutcome.kind === "account-unavailable") {
-      throw new Error(policyOutcome.message);
-    }
   }
-  // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
-  const allowEmptyAssistantReplyAsSilent = true;
   const finalizePromptForResolvedTools = ({
     prompt,
     messageToolAvailable,
   }: {
     prompt: string;
     messageToolAvailable: boolean;
-  }) => {
-    const deliveryMessageToolAvailable = sourceDelivery.messageTool.enabled && messageToolAvailable;
-    if (sourceReplyDeliveryMode === "message_tool_only" && !deliveryMessageToolAvailable) {
-      throw new Error(
-        "Cron source delivery requires the message tool, but the selected runtime does not expose it. Allow the message tool, choose a compatible runtime, or use automatic delivery.",
-      );
-    }
-    const promptWithDeliveryGuidance = appendCronDeliveryInstruction({
-      commandBody: prompt,
+  }) =>
+    finalizeCronPromptForResolvedTools({
+      prompt,
+      messageToolAvailable,
       deliveryRequested: params.deliveryRequested,
-      messageToolEnabled: deliveryMessageToolAvailable,
-      resolvedDeliveryOk: params.resolvedDelivery.ok,
-      requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-    });
-    const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
-      resolvedDeliveryOk: params.resolvedDelivery.ok,
-      messageToolAvailable: deliveryMessageToolAvailable,
       resolvedDelivery: params.resolvedDelivery,
       sourceDelivery,
+      messageToolFormatPrompt: params.messageToolFormatPrompt,
     });
-    return deliveryTargetRuntimeContext
-      ? `${promptWithDeliveryGuidance}\n\n${deliveryTargetRuntimeContext}`.trim()
-      : promptWithDeliveryGuidance;
-  };
   let pendingUserTurn:
     | {
         promptText: string;
@@ -272,6 +245,7 @@ function createCronPromptExecutor(
       messageActionTurnCapability,
       close: closePromptAdmission,
     } = prepareCronPromptRunAdmission({
+      admissionSource: params.admissionSource,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,
@@ -283,9 +257,9 @@ function createCronPromptExecutor(
       scheduledToolPolicy,
       executionIdentity: params.executionIdentity,
     });
-    const onExecutionStarted = (info?: CronRunnerStartedInfo) => {
+    const onExecutionStarted = async (info?: CronRunnerStartedInfo) => {
       params.onExecutionStarted?.(info);
-      params.executionIdentity?.onExecutionStarted?.();
+      await params.executionIdentity?.onExecutionStarted?.();
     };
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
@@ -473,6 +447,8 @@ function createCronPromptExecutor(
         const buildCommonRunParams = () =>
           ({
             preparedRunAdmission,
+            ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
+            cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             execCompletionSessionKey: params.completionSessionKey,
@@ -490,7 +466,8 @@ function createCronPromptExecutor(
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
-            allowEmptyAssistantReplyAsSilent,
+            // Scheduling permits silence; an announce route only selects where output goes.
+            terminalReplyExpectation: "optional",
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
@@ -498,6 +475,7 @@ function createCronPromptExecutor(
             execOverrides: params.suppressExecNotifyOnExit
               ? SUPPRESS_EXEC_NOTIFY_OVERRIDES
               : undefined,
+            extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             scheduledToolPolicy,
@@ -576,8 +554,6 @@ function createCronPromptExecutor(
                   sessionFile,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
-                  workspaceDir: params.executionRoot ?? params.workspaceDir,
-                  bootstrapWorkspaceDir: params.workspaceDir,
                   rootedExecution,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
@@ -590,6 +566,7 @@ function createCronPromptExecutor(
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
+                    extraSystemPromptStatic: params.deliverySystemPrompt,
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },
@@ -660,7 +637,6 @@ function createCronPromptExecutor(
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
           agentDir: params.agentDir,
-          ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           requestedRouteResolution: "resolved",
@@ -680,10 +656,6 @@ function createCronPromptExecutor(
           execSession: params.cronSession.sessionEntry,
           deferTerminalLifecycle: true,
           onAgentEvent: params.lifecycle.note,
-          // Cron owns the resolved delivery contract. A valid announce route
-          // still needs a final payload; none, webhook, and invalid routes do not.
-          terminalReplyExpectation:
-            params.deliveryRequested && params.resolvedDelivery.ok ? "required" : "optional",
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
@@ -841,19 +813,18 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     let hasFreshDescendants = false;
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
-      const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await cronSubagentRegistryRuntimeLoader.load();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
-        const descendantStartedAt =
-          typeof entry.execution.startedAt === "number"
-            ? entry.execution.startedAt
-            : entry.createdAt;
-        return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-      });
-      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
+      const { readDescendantExecutionState } = await cronSubagentRegistryRuntimeLoader.load();
+      const descendants = await readDescendantExecutionState(params.runSessionKey, runStartedAt);
+      hasFreshDescendants = descendants.hasFreshDescendants;
+      hasActiveDescendants = descendants.hasActiveDescendants;
     }
 
-    if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
+    if (
+      shouldRetryInterimAck &&
+      !params.isAborted() &&
+      !hasFreshDescendants &&
+      !hasActiveDescendants
+    ) {
       // Retry a bare acknowledgement only when no descendant subagent was
       // spawned; otherwise delivery waits for the subagent follow-up path.
       const continuationPrompt = [

@@ -7,6 +7,30 @@ const job = (sessionKey?: string): CronJob => ({ sessionKey }) as CronJob;
 const ISOLATED_RUN_KEY = "agent:main:cron:job-1:run:run-1";
 
 describe("selectCronRouteCurrentSessionKey", () => {
+  it.each([
+    [
+      "bound group thread",
+      "agent:main:mattermost:group:private:thread:root",
+      "mattermost:channel:private",
+      true,
+    ],
+    [
+      "different destination",
+      "agent:main:mattermost:group:private:thread:root",
+      "channel:other",
+      false,
+    ],
+    [
+      "malformed conversation",
+      "agent:main:mattermost:group:private:unexpected",
+      "channel:private",
+      false,
+    ],
+  ] as const)("keeps current-main %s selection", (_case, binding, target, matches) => {
+    expect(
+      selectCronRouteCurrentSessionKey(job(binding), ISOLATED_RUN_KEY, "mattermost", target),
+    ).toBe(matches ? binding : ISOLATED_RUN_KEY);
+  });
   it("prefers a bound Mattermost private-channel (group) thread session over the isolated run key", () => {
     // The exact #95646 scenario: a recheck cron bound to the inbound group session.
     const bound =

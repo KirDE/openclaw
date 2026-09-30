@@ -2,15 +2,20 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
+  artifact: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-artifact",
+    distWorkerPath: "cli/update-cli/update-command-artifact.js",
+  },
+  commandCleanup: {
+    currentModuleUrl,
+    sourceWorkerName: "../../process/exec-result",
+    distWorkerPath: "process/exec-result.js",
+  },
   signalExitBarrier: {
     currentModuleUrl,
     sourceWorkerName: "../signal-exit-barrier",
     distWorkerPath: "cli/signal-exit-barrier.js",
-  },
-  commandRepair: {
-    currentModuleUrl,
-    sourceWorkerName: "update-command-repair",
-    distWorkerPath: "cli/update-cli/update-command-repair.js",
   },
   retainedService: {
     currentModuleUrl,
@@ -26,6 +31,16 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "update-command-run",
     distWorkerPath: "cli/update-cli/update-command-run.js",
+  },
+  candidateStepWriter: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-run-write.async",
+    distWorkerPath: "infra/update-run-write.async.js",
+  },
+  executionGuards: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-execution-guards",
+    distWorkerPath: "cli/update-cli/update-command-execution-guards.js",
   },
   commandTarget: {
     currentModuleUrl,
@@ -81,6 +96,11 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../../daemon/service-update-authority",
     distWorkerPath: "daemon/service-update-authority.js",
+  },
+  includeDelegated: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-include-delegated.test-support",
+    distWorkerPath: "test-support/update-include-delegated.js",
   },
   configIO: {
     currentModuleUrl,

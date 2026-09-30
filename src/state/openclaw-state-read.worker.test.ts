@@ -10,8 +10,8 @@ const mock = vi.hoisted(() => ({
   query: vi.fn<() => []>(),
   settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
 }));
-vi.mock("../infra/worker-task-pool.js", () => ({
-  serveWorkerTasks: (handler: (input: unknown) => OpenClawStateReadReply) => {
+vi.mock("../infra/worker-task-server.js", () => ({
+  serveOwnedWorkerTasks: (handler: (input: unknown) => OpenClawStateReadReply) => {
     mock.handler.mockImplementation(handler);
   },
 }));
@@ -22,10 +22,8 @@ vi.mock("../fleet/registry.kernel.js", () => ({
 vi.mock("./openclaw-agent-db-registry.read.js", () => ({
   readRegisteredAgentDatabaseRows: mock.query,
 }));
-vi.mock("./openclaw-state-db-cache.js", () => ({
-  openClawStateDatabaseCache: { assertOpenClawStateDatabaseFreshOpenAllowedAtPath() {} },
-}));
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
+  closeRetainedOpenClawStateReadConnections: vi.fn(),
   readOpenClawStateReadOnlyLocation: mock.settle,
   withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
     mock.admit();
@@ -38,7 +36,6 @@ import "./openclaw-state-read.worker.js";
 const request: OpenClawStateReadRequest = {
   context: {
     environment: { OPENCLAW_STATE_DIR: "/fixture" },
-    coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
   },
   databasePath: "/fixture/state.sqlite",
   location: "/fixture/snapshot.sqlite",

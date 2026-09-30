@@ -1,15 +1,44 @@
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type {
+  claimDeliveryQueueEntryPlatformSendInDatabase,
+  renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
+} from "./delivery-queue-sqlite-claim.kernel.js";
+import type {
   countFailedDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.kernel.js";
-import type { loadDeliveryQueueMediaRetentionSnapshotInDatabase } from "./outbound/delivery-queue-media-staging.kernel.js";
+import type {
+  createDeliveryQueueMediaRetentionInDatabase,
+  loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+} from "./outbound/delivery-queue-media-staging.kernel.js";
+import type { findDeliveryIntentOwnersInDatabase } from "./outbound/delivery-queue-ownership.kernel.js";
 import type {
   AckDeliveryOptions,
   FailPendingDeliveryResult,
 } from "./outbound/delivery-queue-settlement.types.js";
+import type { OutboundDeliveryStorageOperations } from "./outbound/delivery-queue-storage.worker-contract.js";
 
-export type DeliveryQueueWorkerOperations = {
+export type DeliveryQueueWorkerOperations = OutboundDeliveryStorageOperations & {
+  "deliveryQueue.findIntentOwners": {
+    input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1];
+    output: ReturnType<typeof findDeliveryIntentOwnersInDatabase>;
+  };
+  "deliveryQueue.claimPlatformSend": {
+    input: Omit<
+      Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1],
+      "queueName"
+    > & {
+      claimId: string;
+    };
+    output: ReturnType<typeof claimDeliveryQueueEntryPlatformSendInDatabase>;
+  };
+  "deliveryQueue.renewPlatformSendLease": {
+    input: Omit<
+      Parameters<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>[1],
+      "queueName"
+    >;
+    output: ReturnType<typeof renewDeliveryQueueEntryPlatformSendLeaseInDatabase>;
+  };
   "deliveryQueue.ack": {
     input: { id: string; stateDir: string; options?: AckDeliveryOptions };
     output: string[];
@@ -45,6 +74,15 @@ export type DeliveryQueueWorkerOperations = {
     output: ReturnType<typeof countFailedDeliveryQueueEntriesInDatabase>;
   };
   "deliveryQueue.pruneTombstones": { input: undefined; output: void };
+  "deliveryQueue.createMediaRetention": {
+    input: {
+      artifacts: string[];
+      entryKind: Parameters<typeof createDeliveryQueueMediaRetentionInDatabase>[2];
+      prepared: { id: string; enqueuedAt: number };
+    };
+    output: string;
+  };
+  "deliveryQueue.cancelMediaRetention": { input: { id: string }; output: void };
   "deliveryQueue.mediaRetentionSnapshot": {
     input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1];
     output: ReturnType<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>;

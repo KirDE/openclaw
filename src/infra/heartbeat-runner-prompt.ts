@@ -5,7 +5,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
@@ -133,6 +133,15 @@ export async function resolveHeartbeatPreflight(params: {
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
+  let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
+  try {
+    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
+      kind: "heartbeat",
+      agentId: params.agentId,
+    });
+  } catch (error) {
+    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
+  }
   const wakeFlags = resolveHeartbeatWakePayloadFlags({
     source: params.source,
     reason: params.reason,
@@ -180,15 +189,6 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
-  let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
-  try {
-    monitorScratch = readHeartbeatMonitorScratch(
-      resolveCronJobsStorePathFromConfig(params.cfg),
-      params.agentId,
-    );
-  } catch (error) {
-    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
-  }
   const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   const basePreflight = {
     ...wakeFlags,
@@ -265,7 +265,6 @@ type HeartbeatPromptResolution = {
   inspectedSystemEventsToConsume: SystemEvent[];
 };
 
-/** Appends monitor scratch prose to the generated heartbeat prompt. */
 function appendHeartbeatScratch(prompt: string, heartbeatScratchContent?: string): string {
   if (!heartbeatScratchContent) {
     return prompt;
@@ -282,7 +281,6 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-  startedAt: number;
   scheduledTasks: readonly HeartbeatScheduledTask[];
   heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;
@@ -326,9 +324,8 @@ export function resolveHeartbeatRunPrompt(params: {
 ${taskList}
 
 ${completionInstruction}`;
-    const prompt = appendHeartbeatScratch(taskPrompt, params.heartbeatScratchContent);
     return {
-      prompt,
+      prompt: appendHeartbeatScratch(taskPrompt, params.heartbeatScratchContent),
       hasTaskContinuation: hasBackgroundTaskEvent,
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
@@ -339,32 +336,20 @@ ${completionInstruction}`;
     };
   }
 
-  const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool;
-  const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(
-        execEvents.map((event) => event.text),
-        {
-          deliverToUser: params.canRelayToUser,
-          useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-        },
-      )
-    : hasCronEvents
-      ? buildCronEventPrompt(
-          cronEvents.map((event) => event.text),
+  const basePrompt =
+    hasExecCompletion || hasCronEvents
+      ? (hasExecCompletion ? buildExecEventPrompt : buildCronEventPrompt)(
+          (hasExecCompletion ? execEvents : cronEvents).map((event) => event.text),
           {
             deliverToUser: params.canRelayToUser,
-            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+            useHeartbeatResponseTool: params.useHeartbeatResponseTool,
           },
         )
-      : baseUsesHeartbeatResponseTool
+      : params.useHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
         : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
-  const basePromptWithDirectives = appendHeartbeatScratch(
-    basePrompt,
-    params.heartbeatScratchContent,
-  );
   return {
-    prompt: basePromptWithDirectives,
+    prompt: appendHeartbeatScratch(basePrompt, params.heartbeatScratchContent),
     hasTaskContinuation:
       hasExecCompletion ||
       hasBackgroundTaskEvent ||
@@ -372,7 +357,7 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
-    usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+    usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
     genericEvents,
     inspectedSystemEventsToConsume: [
       ...cronNoise,

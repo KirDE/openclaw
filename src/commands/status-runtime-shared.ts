@@ -2,8 +2,10 @@
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
@@ -153,6 +155,25 @@ async function resolveStatusLastHeartbeat(params: {
 // --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
 const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
 
+/** Preserve independent service diagnostics when local status collection refuses state. */
+export async function reportStatusScanFailure(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<never> {
+  try {
+    const { installationDrift } = await getDaemonStatusSummary(
+      timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS,
+    );
+    if (installationDrift) {
+      runtime.error(sanitizeTerminalText(installationDrift));
+    }
+  } catch {
+    // Optional diagnostics must not replace the original collection or schema refusal.
+  }
+  throw error;
+}
+
 /** Resolves launchd/systemd summaries for the gateway and node services together. */
 export async function resolveStatusServiceSummaries(timeoutMs?: number) {
   const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
@@ -164,15 +185,12 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
-type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
-type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
-type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
-type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
-/** Resolves optional usage/deep runtime details plus service summaries for status output. */
-async function resolveStatusRuntimeDetails(params: {
+/** Resolves the full runtime snapshot, including optional security audit, for status JSON/text. */
+export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
   timeoutMs?: number;
   gatewayProbeDeadlineMs: number;
   agentId?: string;
@@ -181,7 +199,13 @@ async function resolveStatusRuntimeDetails(params: {
   gatewayReachable: boolean;
   gatewayStartupPhase?: string;
   gatewayProbeError?: string | null;
+  includeSecurityAudit?: boolean;
   suppressHealthErrors?: boolean;
+  resolveSecurityAudit?: (input: {
+    config: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
+    timeoutMs?: number;
+  }) => Promise<StatusSecurityAudit>;
   resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
     config: OpenClawConfig;
@@ -189,6 +213,13 @@ async function resolveStatusRuntimeDetails(params: {
     gatewayProbeDeadlineMs: number;
   }) => Promise<StatusGatewayHealth>;
 }) {
+  const securityAudit = params.includeSecurityAudit
+    ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
+        config: params.config,
+        sourceConfig: params.sourceConfig,
+        timeoutMs: params.timeoutMs,
+      })
+    : undefined;
   const resolveUsageSummary = params.resolveUsage ?? resolveStatusUsageSummary;
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
   const usage = params.usage
@@ -227,78 +258,12 @@ async function resolveStatusRuntimeDetails(params: {
         })
       : null;
   const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
-  const result = {
+  return {
+    securityAudit,
     usage,
     health,
     lastHeartbeat,
     gatewayService,
     nodeService,
-  };
-  return result satisfies {
-    usage?: StatusUsageSummary;
-    health?: StatusGatewayHealthResult;
-    lastHeartbeat: StatusLastHeartbeat;
-    gatewayService: StatusGatewayServiceSummary;
-    nodeService: StatusNodeServiceSummary;
-  };
-}
-
-/** Resolves the full runtime snapshot, including optional security audit, for status JSON/text. */
-export async function resolveStatusRuntimeSnapshot(params: {
-  config: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  agentId?: string;
-  usage?: boolean;
-  deep?: boolean;
-  gatewayReachable: boolean;
-  gatewayStartupPhase?: string;
-  gatewayProbeError?: string | null;
-  includeSecurityAudit?: boolean;
-  suppressHealthErrors?: boolean;
-  resolveSecurityAudit?: (input: {
-    config: OpenClawConfig;
-    sourceConfig: OpenClawConfig;
-    timeoutMs?: number;
-  }) => Promise<StatusSecurityAudit>;
-  resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
-  resolveHealth?: (input: {
-    config: OpenClawConfig;
-    timeoutMs?: number;
-    gatewayProbeDeadlineMs: number;
-  }) => Promise<StatusGatewayHealth>;
-}) {
-  const securityAudit = params.includeSecurityAudit
-    ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
-        config: params.config,
-        sourceConfig: params.sourceConfig,
-        timeoutMs: params.timeoutMs,
-      })
-    : undefined;
-  const runtimeDetails = await resolveStatusRuntimeDetails({
-    config: params.config,
-    timeoutMs: params.timeoutMs,
-    gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    usage: params.usage,
-    deep: params.deep,
-    gatewayReachable: params.gatewayReachable,
-    gatewayStartupPhase: params.gatewayStartupPhase,
-    gatewayProbeError: params.gatewayProbeError,
-    suppressHealthErrors: params.suppressHealthErrors,
-    resolveUsage: params.resolveUsage,
-    resolveHealth: params.resolveHealth,
-  });
-  return {
-    securityAudit,
-    ...runtimeDetails,
-  } satisfies {
-    securityAudit?: StatusSecurityAudit;
-    usage?: StatusUsageSummary;
-    health?: StatusGatewayHealthResult;
-    lastHeartbeat: StatusLastHeartbeat;
-    gatewayService: StatusGatewayServiceSummary;
-    nodeService: StatusNodeServiceSummary;
   };
 }

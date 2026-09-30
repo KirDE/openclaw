@@ -190,10 +190,12 @@ export {
   verifyDurableFinalCapabilityProofs,
 } from "../channels/message/contracts.js";
 export {
+  createLivePreviewLifecycle,
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
+export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -261,7 +263,16 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatchCore(params);
+  return await mod.sendDurableMessageBatchCore(stripPluginSourceGeneration(params));
+}
+
+/** Plugin calls cannot mint the host's persisted exec-completion source authority. */
+function stripPluginSourceGeneration(
+  params: DurableMessageSendContextParams,
+): DurableMessageSendContextParams {
+  const safe = { ...params };
+  delete (safe as typeof safe & { sourceGeneration?: unknown }).sourceGeneration;
+  return safe;
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -276,7 +287,7 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContextCore(params, run);
+  return await mod.withDurableMessageSendContextCore(stripPluginSourceGeneration(params), run);
 }
 
 export {
