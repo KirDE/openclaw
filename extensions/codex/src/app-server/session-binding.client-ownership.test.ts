@@ -2,60 +2,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 
-function createStateStore(): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> {
-  const values = new Map<string, StoredCodexAppServerBinding>();
-  return {
-    register: (key, value) => void values.set(key, value),
-    registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (!next) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
-    },
-    lookup: (key) => values.get(key),
-    consume(key) {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: (key) => values.delete(key),
-    deleteIf(key, predicate) {
-      const value = values.get(key);
-      return value !== undefined && predicate(value) && values.delete(key);
-    },
-    entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    clear: () => values.clear(),
-  };
-}
-
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
 describe("Codex app-server physical-client binding ownership", () => {
   it("clears only the exact physical client owner", async () => {
-    const store = createCodexAppServerBindingStore(createStateStore());
+    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
     const identity = { kind: "session" as const, agentId: "main", sessionId: "session-clear-cas" };
     await store.mutate(identity, {
       kind: "set",
@@ -93,7 +57,7 @@ describe("Codex app-server physical-client binding ownership", () => {
     };
     const openStore = () =>
       createCodexAppServerBindingStore(
-        createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        createCodexSqliteTestBindingStateStore({
           namespace: "client-owner-reopen",
           maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
           overflowPolicy: "reject-new",
@@ -115,6 +79,7 @@ describe("Codex app-server physical-client binding ownership", () => {
       ).resolves.toBe(false);
       expect(fresh.read(identity)).toMatchObject({ clientId: "client-new" });
 
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       const resumed = openStore();
       expect(resumed.read(identity)).toMatchObject({
@@ -138,6 +103,7 @@ describe("Codex app-server physical-client binding ownership", () => {
       ).resolves.toBe(true);
       expect(resumed.read(identity)).toBeUndefined();
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       fs.rmSync(root, { recursive: true, force: true });
     }

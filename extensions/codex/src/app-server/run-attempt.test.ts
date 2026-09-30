@@ -55,13 +55,6 @@ import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import {
-  createGoogleCalendarRequest,
-  googleCalendarAppInfo,
-  GOOGLE_CALENDAR_PLUGIN_CONFIG,
-  type GoogleCalendarCacheKeyInput,
-  primeGoogleCalendarAppInventory,
-} from "./google-calendar.test-helpers.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import {
