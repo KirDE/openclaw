@@ -51,7 +51,11 @@ function createFixture(acknowledged: boolean) {
     .fn()
     .mockResolvedValue({ threadId: "replacement-thread" });
   const state = {
-    thread: { threadId: "reviewed-thread", connectionScope: "isolated" },
+    thread: {
+      threadId: "reviewed-thread",
+      clientId: "reviewed-client",
+      connectionScope: "isolated",
+    },
     restartContextEngineCodexThread,
   };
   // Only the start-recovery owner runs here. The mocked transport owns validation
@@ -126,6 +130,13 @@ describe("native acknowledged turn recovery boundary", () => {
         kind === "compact" ? 1 : 0,
       );
       expect(ordinary.mutateBinding).toHaveBeenCalledTimes(kind === "overflow" ? 1 : 0);
+      if (kind === "overflow") {
+        expect(ordinary.mutateBinding).toHaveBeenCalledWith(
+          "binding-1",
+          { kind: "clear", threadId: "reviewed-thread", clientId: "reviewed-client" },
+          undefined,
+        );
+      }
       expect(ordinary.restartContextEngineCodexThread).toHaveBeenCalledTimes(
         kind === "overflow" ? 1 : 0,
       );
