@@ -64,7 +64,6 @@ import {
   type NormalizedOutboundPayload,
 } from "./outbound/payloads.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { isSourceGenerationCurrent } from "./source-generation-authority.js";
 import { resolveSystemEventQueueKey, withSystemEventOwner } from "./system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
@@ -78,16 +77,8 @@ type HeartbeatDispatch = {
   deliverySilent?: boolean;
   projectTarget?: boolean;
   publicationSourceText?: string;
-  sourceGenerationInvalidated?: boolean;
   prepareReply: NonNullable<ReplyOperationRunState["heartbeat"]>["prepareReply"];
 };
-
-function isExecCompletionSourceGenerationCurrent(policy: HeartbeatDispatch): boolean {
-  return isSourceGenerationCurrent(
-    policy.wake.preflight.execCompletionSourceGeneration,
-    policy.wake.agentId,
-  );
-}
 
 export function createHeartbeatDispatch(
   opts: HeartbeatRunOptions,
@@ -287,16 +278,12 @@ async function prepareHeartbeatDispatchReply(
         resolveSystemEventQueueKey(sessionKey, agentId),
         prepared.inspectedSystemEventsToConsume,
       );
-      if (
-        preflight.deferredExecEventEntries.length > 0 ||
-        (prepared.hasExecCompletion && prepared.hasCronEvents)
-      ) {
-        const hasDeferredExec = preflight.deferredExecEventEntries.length > 0;
+      if (prepared.hasExecCompletion && prepared.hasCronEvents) {
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
-        (opts.deps?.requestHeartbeat ?? requestHeartbeat)({
-          source: hasDeferredExec ? "exec-event" : "cron",
-          intent: hasDeferredExec ? "event" : "immediate",
-          reason: hasDeferredExec ? "exec-event" : "cron:pending",
+        requestHeartbeat({
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:pending",
           agentId,
           sessionKey,
           heartbeat: wake.heartbeat && {
@@ -304,9 +291,6 @@ async function prepareHeartbeatDispatchReply(
             ...(wake.heartbeat.to !== undefined ? { to: wake.heartbeat.to } : {}),
             ...(wake.heartbeat.accountId !== undefined
               ? { accountId: wake.heartbeat.accountId }
-              : {}),
-            ...(wake.heartbeat.isolatedSession !== undefined
-              ? { isolatedSession: wake.heartbeat.isolatedSession }
               : {}),
           },
         });
@@ -439,7 +423,6 @@ async function prepareHeartbeatDispatchReply(
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
-      !prepared.hasExecCompletion &&
       !prepared.internalProjection &&
       !outcome.mediaUrls.length &&
       !outcome.hasStructuredReplyContent &&
@@ -525,19 +508,6 @@ async function prepareHeartbeatDispatchReply(
       heartbeatReply: true,
     }),
     settle: async (result) => {
-      if (policy.sourceGenerationInvalidated) {
-        await suppressSelected();
-        finish(
-          {
-            status: "skipped",
-            reason: "source-session-replaced",
-            channel,
-            silent: true,
-          },
-          true,
-        );
-        return;
-      }
       const sent = result === "delivered";
       if (!sent) {
         await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
@@ -593,11 +563,6 @@ export async function deliverHeartbeatDispatch(
   const { cfg, agentId, startedAt } = policy.wake;
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey, internalProjection } =
     policy.prepared;
-  if (!isExecCompletionSourceGenerationCurrent(policy)) {
-    policy.sourceGenerationInvalidated = true;
-    policy.deliveryReason = "source-session-replaced";
-    return { visibleReplySent: false };
-  }
   const onDeliveredPayload = policy.projectTarget
     ? prepareHeartbeatTargetAwareness({
         agentId,
@@ -654,7 +619,6 @@ export async function deliverHeartbeatDispatch(
       signal,
       silent: policy.deliverySilent,
       onDeliveredPayload,
-      sourceGeneration: policy.wake.preflight.execCompletionSourceGeneration,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;

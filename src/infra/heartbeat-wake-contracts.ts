@@ -25,7 +25,6 @@ type HeartbeatWakeOverride = {
   target?: string;
   to?: string | undefined;
   accountId?: string | undefined;
-  isolatedSession?: boolean;
 };
 
 /** Cron-owned periodic work carried directly into a guarded heartbeat turn. */

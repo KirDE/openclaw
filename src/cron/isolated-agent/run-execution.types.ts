@@ -16,8 +16,6 @@ export type CronRunExecutionParams = Pick<
   | "agentDir"
   | "agentSessionKey"
   | "runSessionKey"
-  | "completionSessionKey"
-  | "completionSessionGeneration"
   | "usesDetachedRunSession"
   | "workspaceDir"
   | "cwd"

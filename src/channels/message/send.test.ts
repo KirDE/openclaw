@@ -3,23 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundPayloadDeliveryOutcome } from "../../infra/outbound/deliver-types.js";
-import type {
-  DeliverOutboundPayloadsParams,
-  OutboundDeliveryIntent,
-} from "../../infra/outbound/deliver.js";
-
-type PluginSendParams = Parameters<
-  typeof import("../../plugin-sdk/channel-outbound.js").sendDurableMessageBatch
->[0];
-
-it("keeps persisted exec source authority internal to outbound delivery", () => {
-  const internalSourceField: "sourceGeneration" extends keyof DeliverOutboundPayloadsParams
-    ? true
-    : false = true;
-  const publicSourceField: "sourceGeneration" extends keyof PluginSendParams ? true : false = false;
-  expect(internalSourceField).toBe(true);
-  expect(publicSourceField).toBe(false);
-});
+import type { OutboundDeliveryIntent } from "../../infra/outbound/deliver.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 

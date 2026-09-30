@@ -6,7 +6,6 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
-import type { ExecCompletionRoutingOptions } from "./agent-tools.exec-completion-routing.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
@@ -134,8 +133,7 @@ export type OpenClawCodingToolsOptions = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
-} & ExecCompletionRoutingOptions &
-  OpenClawSharedToolsOptions &
+} & OpenClawSharedToolsOptions &
   Omit<ModelAwareToolContext, "requesterAgentIdOverride"> &
   AgentRunClientContext &
   AgentRunMessageContext &

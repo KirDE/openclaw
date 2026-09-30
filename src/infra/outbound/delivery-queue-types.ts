@@ -13,7 +13,6 @@ import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.types.js";
-import type { SystemEventSourceGeneration } from "../system-events.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -70,7 +69,6 @@ export type QueuedDeliveryPayload = {
   gatewayClientScopes?: readonly string[];
   preparedMessageId?: string;
   deliveryCompletion?: DurableDeliveryCompletion;
-  sourceGeneration?: SystemEventSourceGeneration;
   completionRetention?: DeliveryQueueCompletionRetention;
   legacyUnknownSendReconciliation?: Exclude<
     ChannelMessageUnknownSendReconciliationResult,

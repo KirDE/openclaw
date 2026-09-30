@@ -16,7 +16,6 @@ import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { SystemEventSourceGeneration } from "../system-events.js";
 import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type {
   OutboundDeliveryQueuePolicy,
@@ -228,8 +227,6 @@ export type DeliverOutboundPayloadsCoreParams = {
   conversationDeliveryAttemptAuthority?: ConversationDeliveryAttemptAuthority;
   /** @internal Revalidates authority once per durable queue execution, before adapter fanout. */
   onDeliveryAttempt?: () => Promise<void>;
-  /**  Serializable source-session authority retained by durable recovery. */
-  sourceGeneration?: SystemEventSourceGeneration;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */

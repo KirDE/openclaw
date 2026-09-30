@@ -1,5 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
@@ -14,7 +15,6 @@ import {
 } from "../../agents/cli-session.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import { SUPPRESS_EXEC_NOTIFY_OVERRIDES } from "../../agents/exec-defaults.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import {
@@ -48,7 +48,7 @@ import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provena
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
-  resolveCurrentChannelContext,
+  resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
@@ -428,6 +428,13 @@ function createCronPromptExecutor(
           cliExecution ? executionProvider : undefined,
         );
         const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
+        // CLI runs need the same channel-native target as embedded runs so a
+        // detached exec completion inherits the originating Telegram topic.
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         const fastModeState = resolveFastModeState({
@@ -437,12 +444,6 @@ function createCronPromptExecutor(
           agentId: params.agentId,
           sessionEntry: params.cronSession.sessionEntry,
         });
-        // Both runners get the same resolved route so detached exec completions stay on the source topic.
-        const currentChannelContext = await resolveCurrentChannelContext({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
-        });
         // Snapshot mutable session and transcript facts only when the runtime is invoked.
         const buildCommonRunParams = () =>
           ({
@@ -451,8 +452,6 @@ function createCronPromptExecutor(
             cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
-            execCompletionSessionKey: params.completionSessionKey,
-            execCompletionSessionGeneration: params.completionSessionGeneration,
             sessionTarget,
             agentId: params.agentId,
             trigger: "cron",
@@ -471,10 +470,8 @@ function createCronPromptExecutor(
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
-            ...currentChannelContext,
-            execOverrides: params.suppressExecNotifyOnExit
-              ? SUPPRESS_EXEC_NOTIFY_OVERRIDES
-              : undefined,
+            currentChannelId,
+            currentThreadTs: normalizeOptionalStringifiedId(params.resolvedDelivery.threadId),
             extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -629,6 +626,8 @@ function createCronPromptExecutor(
           provider: providerOverride,
           model: modelOverride,
         });
+        // Embedded runs receive both the explicit route and the current-channel
+        // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
           ...buildCommonRunParams(),
           promptCacheKey,
@@ -636,6 +635,7 @@ function createCronPromptExecutor(
           allowGatewaySubagentBinding: true,
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
+          currentChannelId,
           agentDir: params.agentDir,
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
@@ -654,6 +654,12 @@ function createCronPromptExecutor(
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,
           execSession: params.cronSession.sessionEntry,
+          execOverrides: params.suppressExecNotifyOnExit
+            ? {
+                notifyOnExit: false,
+                notifyOnExitEmptySuccess: false,
+              }
+            : undefined,
           deferTerminalLifecycle: true,
           onAgentEvent: params.lifecycle.note,
           disableMessageTool: !sourceDelivery.messageTool.enabled,

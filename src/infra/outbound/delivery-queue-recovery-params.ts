@@ -86,7 +86,6 @@ export async function buildRecoveryDeliverParams(
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
     preparedMessageId: entry.preparedMessageId,
-    sourceGeneration: entry.sourceGeneration,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
     ...(conversationCompletion

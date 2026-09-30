@@ -69,7 +69,6 @@ import {
   resolveMaxRetries,
   resolveAttemptCount,
 } from "./delivery-queue-recovery-policy.js";
-import { needsUnknownSendReconciliation } from "./delivery-queue-recovery-state.js";
 import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
@@ -210,6 +209,12 @@ function emitQueuedAuditTerminals(
     startedAt: entry.enqueuedAt,
     queueId: entry.id,
   });
+}
+
+function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
+  return (
+    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
+  );
 }
 
 export async function withActiveDeliveryClaim<T>(

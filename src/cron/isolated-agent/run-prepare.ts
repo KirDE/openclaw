@@ -22,7 +22,6 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
-import { resolveCronRouteCompletionSession } from "./delivery-route-session-key.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
@@ -442,18 +441,6 @@ export async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
-    const completionSession = resolveCronRouteCompletionSession({
-      job: input.job,
-      agentSessionKey,
-      sourceSessionKey,
-      usesDetachedRunSession,
-      standaloneRunGeneration: {
-        sessionId: cronSession.sessionEntry.sessionId,
-        lifecycleRevision: cronSession.sessionEntry.lifecycleRevision,
-      },
-      delivery: resolvedDelivery,
-      sessionStore: cronSession.store,
-    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -607,8 +594,6 @@ export async function prepareCronRunContext(params: {
         agentDir,
         agentSessionKey,
         sourceSessionKey,
-        completionSessionKey: completionSession.sessionKey,
-        completionSessionGeneration: completionSession.generation,
         sourceSessionGeneration,
         runSessionId,
         currentRunSessionId,
@@ -644,8 +629,7 @@ export async function prepareCronRunContext(params: {
         // Applied only after the final tool surface exposes the message tool.
         messageToolFormatPrompt,
         sourceDelivery,
-        suppressExecNotifyOnExit:
-          deliveryPlan.mode === "none" || completionSession.rejectDetachedCompletion,
+        suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,
         liveSelection,
         useSubagentFallbacks,

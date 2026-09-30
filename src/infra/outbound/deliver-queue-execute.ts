@@ -4,7 +4,6 @@ import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/se
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
-import { assertSourceGenerationCurrent } from "../source-generation-authority.js";
 import { throwIfAborted } from "./abort.js";
 import type {
   InternalDeliverOutboundPayloadsParams,
@@ -262,8 +261,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onDirectAdapterHandoff: async () => {
       throwIfAborted(params.abortSignal);
-      // The synchronous final adapter handoff below rechecks the source after
-      // this awaited preparation. Reading it here cannot protect that gap.
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -277,7 +274,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       generation?.assertCurrent();
       params.assertDirectAdapterHandoff?.();
       throwIfAborted(params.abortSignal);
-      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -286,7 +282,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onPlatformSendDispatch: async () => {
       throwIfAborted(params.abortSignal);
-      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
@@ -312,8 +307,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }
       }
       throwIfAborted(params.abortSignal);
-      // Dispatch marking and the external callback can await. Recheck the
-      // source after both, immediately before an adapter can continue.
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -321,9 +314,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       );
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
-      // Adapters may proceed directly to transport after awaiting this hook.
-      // A source revoked inside the hook must not reach that I/O boundary.
-      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       generation?.assertCurrent();
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);

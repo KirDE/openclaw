@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCronChannelOutputPolicy,
-  resolveCurrentChannelContext,
+  resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -45,6 +45,14 @@ describe("cron channel output policy", () => {
     });
   });
 
+  it("keeps unthreaded targets without loading the channel plugin", async () => {
+    channelPluginMocks.getChannelPlugin.mockClear();
+    await expect(resolveCurrentChannelTarget({ channel: "topicchat", to: "room" })).resolves.toBe(
+      "room",
+    );
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+  });
+
   it("prefers final visible text only for unresolved no-delivery runs", async () => {
     await expect(
       resolveCronChannelOutputPolicy(undefined, { deliveryRequested: false }),
@@ -70,29 +78,18 @@ describe("cron channel output policy", () => {
 
   it("lets channel plugins format current tool context targets", async () => {
     await expect(
-      resolveCurrentChannelContext({
+      resolveCurrentChannelTarget({
         channel: "topicchat",
         to: "room",
         threadId: 42,
       }),
-    ).resolves.toMatchObject({ currentChannelId: "room#42", currentThreadTs: "42" });
+    ).resolves.toBe("room#42");
     await expect(
-      resolveCurrentChannelContext({
+      resolveCurrentChannelTarget({
         channel: "plainchat",
         to: "room",
         threadId: 42,
       }),
-    ).resolves.toMatchObject({ currentChannelId: "room", currentThreadTs: "42" });
-  });
-
-  it("keeps an unthreaded target without consulting the channel plugin", async () => {
-    channelPluginMocks.getChannelPlugin.mockClear();
-    await expect(
-      resolveCurrentChannelContext({ channel: "topicchat", to: "room", threadId: null }),
-    ).resolves.toHaveProperty("currentChannelId", "room");
-    await expect(
-      resolveCurrentChannelContext({ channel: "topicchat", to: "room" }),
-    ).resolves.toHaveProperty("currentChannelId", "room");
-    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+    ).resolves.toBe("room");
   });
 });

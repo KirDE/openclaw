@@ -33,21 +33,6 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
-### Delayed exec-completion delivery custody
-
-The existing shared-state outbound delivery queue stores an optional source
-session generation in its entry payload, not in a new table or column. New
-recovery readers recheck that generation before adapter dispatch; entries
-created by older builds have no such fence and retain their legacy behavior.
-The fence is removed with the queue entry under its normal retention policy.
-
-An older binary cannot enforce a fence recorded by a newer one. Before a
-downgrade, stop new delivery admission and reconcile or drain outstanding
-source-fenced entries with the compatible build; do not let the older build
-replay them after a source session reset. Follow the verified backup and
-rollback procedure in [Updating](/install/updating) for the matching database
-versions. Restoring an older backup does not undo a message already sent.
-
 ### Session reactions
 
 The per-agent `session_reactions` table stores reaction rows as side data for

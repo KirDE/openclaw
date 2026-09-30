@@ -176,7 +176,6 @@ export async function stageAndEnqueueOutboundDelivery(
       completionRetention: params.completionRetention,
       maxRetries: params.maxRetries,
       deliveryCompletion: params.deliveryCompletion,
-      sourceGeneration: params.sourceGeneration,
     };
     if (params.deliveryIntentId) {
       const preparation = await options?.getStablePreparation?.();

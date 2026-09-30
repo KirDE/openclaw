@@ -263,16 +263,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatchCore(stripPluginSourceGeneration(params));
-}
-
-/** Plugin calls cannot mint the host's persisted exec-completion source authority. */
-function stripPluginSourceGeneration(
-  params: DurableMessageSendContextParams,
-): DurableMessageSendContextParams {
-  const safe = { ...params };
-  Reflect.deleteProperty(safe, "sourceGeneration");
-  return safe;
+  return await mod.sendDurableMessageBatchCore(params);
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -287,7 +278,7 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContextCore(stripPluginSourceGeneration(params), run);
+  return await mod.withDurableMessageSendContextCore(params, run);
 }
 
 export {
