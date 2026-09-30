@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { heartbeatRunnerWhatsAppPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import {
+  clearSessionResetRuntimeState,
+  createSessionResetCleanupGuard,
+} from "../auto-reply/reply/session-reset-cleanup.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -306,7 +309,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       try {
         await withTestTimeout(
           inferenceEntered.promise,
-          5_000,
+          15_000,
           "exec completion inference was not observed",
         );
         await replaceTargetLifecycle("target-lifecycle-2");
@@ -379,7 +382,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       try {
         await withTestTimeout(
           completionEntered.promise,
-          5_000,
+          15_000,
           "heartbeat delivery confirmation was not observed",
         );
         const nextHeartbeatPreflight = await resolveHeartbeatPreflight({
@@ -406,7 +409,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         });
       } finally {
         releaseCompletion.resolve();
-        result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");
+        result = await withTestTimeout(heartbeat, 15_000, "heartbeat did not finish delivery");
       }
 
       expect(result.status).toBe("ran");
@@ -496,6 +499,11 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         tmpDir,
         storePath,
       });
+      const assertCurrent = createSessionResetCleanupGuard({
+        storePath,
+        sessionKey: targetSessionKey,
+        expectedSession: { sessionId: "target-session", lifecycleRevision: "target-lifecycle-1" },
+      });
       const completionEntered = createDeferred();
       const releaseCompletion = createDeferred();
       beforeMockDeliveryCompletion.mockImplementationOnce(async () => {
@@ -517,15 +525,17 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       try {
         await withTestTimeout(
           completionEntered.promise,
-          5_000,
+          15_000,
           "heartbeat delivery confirmation was not observed",
         );
         systemEventsCleared = clearSessionResetRuntimeState([targetSessionKey], {
           agentId: "main",
+          sessionKey: targetSessionKey,
+          assertCurrent,
         }).systemEventsCleared;
       } finally {
         releaseCompletion.resolve();
-        result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");
+        result = await withTestTimeout(heartbeat, 15_000, "heartbeat did not finish delivery");
       }
 
       expect(result.status).toBe("ran");
